@@ -1,0 +1,12 @@
+{
+  "domain": "virtual_light_entity",
+  "name": "Virtual Light Entity",
+  "codeowners": ["@gabrielozcomidi"],
+  "config_flow": true,
+  "documentation": "https://github.com/gabrielozcomidi/Virtual-Light-Entity",
+  "integration_type": "device",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/gabrielozcomidi/Virtual-Light-Entity/issues",
+  "version": "1.0.0",
+  "requirements": []
+}

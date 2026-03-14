@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Create Virtual Light",
+        "description": "Set up your virtual light entity. Give it a name and configure the initial state.",
+        "data": {
+          "light_name": "Light Name",
+          "initial_state": "Start turned on",
+          "initial_brightness": "Initial Brightness"
+        }
+      },
+      "color_modes": {
+        "title": "Color Modes",
+        "description": "Select which color modes this virtual light should support. Pick the modes that match the type of light you want to simulate.",
+        "data": {
+          "supported_color_modes": "Supported Color Modes"
+        }
+      },
+      "animations": {
+        "title": "Animations",
+        "description": "Choose which animation effects to enable for this virtual light. These will appear as effects in the light controls.",
+        "data": {
+          "animations": "Available Animations"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Virtual Light Settings",
+        "description": "Update the configuration for this virtual light.",
+        "data": {
+          "light_name": "Light Name",
+          "supported_color_modes": "Supported Color Modes",
+          "animations": "Available Animations",
+          "initial_brightness": "Default Brightness"
+        }
+      }
+    }
+  }
+}
