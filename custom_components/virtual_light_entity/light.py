@@ -7,13 +7,12 @@ from typing import Any
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    ATTR_COLOR_TEMP,
+    ATTR_COLOR_TEMP_KELVIN,
     ATTR_EFFECT,
     ATTR_HS_COLOR,
     ATTR_RGB_COLOR,
     ATTR_RGBW_COLOR,
     ATTR_RGBWW_COLOR,
-    ATTR_TRANSITION,
     ATTR_XY_COLOR,
     ColorMode,
     LightEntity,
@@ -87,8 +86,8 @@ class VirtualLight(LightEntity, RestoreEntity):
 
         # State defaults
         self._attr_is_on = data.get(CONF_INITIAL_STATE, DEFAULT_INITIAL_STATE)
-        self._attr_brightness = data.get(CONF_INITIAL_BRIGHTNESS, DEFAULT_INITIAL_BRIGHTNESS)
-        self._attr_color_temp = None
+        self._attr_brightness = int(data.get(CONF_INITIAL_BRIGHTNESS, DEFAULT_INITIAL_BRIGHTNESS))
+        self._attr_color_temp_kelvin = None
         self._attr_hs_color = None
         self._attr_rgb_color = None
         self._attr_rgbw_color = None
@@ -99,10 +98,10 @@ class VirtualLight(LightEntity, RestoreEntity):
         # Set initial color mode — must be one of the supported modes
         self._attr_color_mode = self._pick_initial_color_mode()
 
-        # Color temp range (mireds)
+        # Color temp range (kelvin)
         if ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
-            self._attr_min_mireds = 153   # ~6500K
-            self._attr_max_mireds = 500   # ~2000K
+            self._attr_min_color_temp_kelvin = 2000
+            self._attr_max_color_temp_kelvin = 6500
 
         # Device info
         self._attr_device_info = DeviceInfo(
@@ -184,8 +183,8 @@ class VirtualLight(LightEntity, RestoreEntity):
 
         if ATTR_BRIGHTNESS in attrs and attrs[ATTR_BRIGHTNESS] is not None:
             self._attr_brightness = attrs[ATTR_BRIGHTNESS]
-        if ATTR_COLOR_TEMP in attrs and attrs[ATTR_COLOR_TEMP] is not None:
-            self._attr_color_temp = attrs[ATTR_COLOR_TEMP]
+        if ATTR_COLOR_TEMP_KELVIN in attrs and attrs[ATTR_COLOR_TEMP_KELVIN] is not None:
+            self._attr_color_temp_kelvin = attrs[ATTR_COLOR_TEMP_KELVIN]
         if ATTR_HS_COLOR in attrs and attrs[ATTR_HS_COLOR] is not None:
             self._attr_hs_color = tuple(attrs[ATTR_HS_COLOR])
         if ATTR_RGB_COLOR in attrs and attrs[ATTR_RGB_COLOR] is not None:
@@ -204,7 +203,7 @@ class VirtualLight(LightEntity, RestoreEntity):
             self._attr_color_mode = ColorMode.HS
         elif self._attr_rgb_color and ColorMode.RGB in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.RGB
-        elif self._attr_color_temp and ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
+        elif self._attr_color_temp_kelvin and ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.COLOR_TEMP
 
     async def async_will_remove_from_hass(self) -> None:
@@ -218,8 +217,8 @@ class VirtualLight(LightEntity, RestoreEntity):
         if ATTR_BRIGHTNESS in kwargs:
             self._attr_brightness = kwargs[ATTR_BRIGHTNESS]
 
-        if ATTR_COLOR_TEMP in kwargs:
-            self._attr_color_temp = kwargs[ATTR_COLOR_TEMP]
+        if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            self._attr_color_temp_kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]
             self._attr_color_mode = ColorMode.COLOR_TEMP
             # Clear other color attrs when switching to color temp
             self._attr_hs_color = None
@@ -231,27 +230,27 @@ class VirtualLight(LightEntity, RestoreEntity):
         if ATTR_HS_COLOR in kwargs:
             self._attr_hs_color = kwargs[ATTR_HS_COLOR]
             self._attr_color_mode = ColorMode.HS
-            self._attr_color_temp = None
+            self._attr_color_temp_kelvin = None
 
         if ATTR_RGB_COLOR in kwargs:
             self._attr_rgb_color = kwargs[ATTR_RGB_COLOR]
             self._attr_color_mode = ColorMode.RGB
-            self._attr_color_temp = None
+            self._attr_color_temp_kelvin = None
 
         if ATTR_RGBW_COLOR in kwargs:
             self._attr_rgbw_color = kwargs[ATTR_RGBW_COLOR]
             self._attr_color_mode = ColorMode.RGBW
-            self._attr_color_temp = None
+            self._attr_color_temp_kelvin = None
 
         if ATTR_RGBWW_COLOR in kwargs:
             self._attr_rgbww_color = kwargs[ATTR_RGBWW_COLOR]
             self._attr_color_mode = ColorMode.RGBWW
-            self._attr_color_temp = None
+            self._attr_color_temp_kelvin = None
 
         if ATTR_XY_COLOR in kwargs:
             self._attr_xy_color = kwargs[ATTR_XY_COLOR]
             self._attr_color_mode = ColorMode.XY
-            self._attr_color_temp = None
+            self._attr_color_temp_kelvin = None
 
         if ATTR_EFFECT in kwargs:
             effect = kwargs[ATTR_EFFECT]
@@ -261,7 +260,7 @@ class VirtualLight(LightEntity, RestoreEntity):
             else:
                 self._attr_effect = None
                 self._animation.stop()
-        elif any(k in kwargs for k in (ATTR_BRIGHTNESS, ATTR_COLOR_TEMP, ATTR_HS_COLOR,
+        elif any(k in kwargs for k in (ATTR_BRIGHTNESS, ATTR_COLOR_TEMP_KELVIN, ATTR_HS_COLOR,
                                         ATTR_RGB_COLOR, ATTR_RGBW_COLOR, ATTR_RGBWW_COLOR,
                                         ATTR_XY_COLOR)):
             # Stop animation if user manually changes a light attribute
@@ -301,8 +300,8 @@ class VirtualLight(LightEntity, RestoreEntity):
             self._attr_effect_list = []
 
         if ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
-            self._attr_min_mireds = 153
-            self._attr_max_mireds = 500
+            self._attr_min_color_temp_kelvin = 2000
+            self._attr_max_color_temp_kelvin = 6500
 
         # Ensure current color_mode is still valid
         if self._attr_color_mode not in self._attr_supported_color_modes:
