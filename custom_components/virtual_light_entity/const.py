@@ -65,5 +65,8 @@ CONF_ANIM_SELECT = "animation_select"
 # Store key
 DATA_STORE = "store"
 
+# Entity registry for test-on-entity
+DATA_ENTITIES = "entities"
+
 # Custom animation prefix for effect names
 CUSTOM_EFFECT_PREFIX = "\u2728 "

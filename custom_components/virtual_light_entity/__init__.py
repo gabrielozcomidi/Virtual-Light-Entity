@@ -14,7 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, PLATFORMS, DATA_STORE
+from .const import DOMAIN, PLATFORMS, DATA_STORE, DATA_ENTITIES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,6 +80,9 @@ async def _async_global_setup(hass: HomeAssistant) -> None:
     # Register websocket commands
     websocket_api.async_register_command(hass, ws_list_animations)
     websocket_api.async_register_command(hass, ws_get_animation)
+    websocket_api.async_register_command(hass, ws_list_vle_entities)
+    websocket_api.async_register_command(hass, ws_test_animation)
+    websocket_api.async_register_command(hass, ws_stop_test)
 
     # Register services
     await _register_services(hass)
@@ -207,6 +210,81 @@ def ws_get_animation(
         connection.send_result(msg["id"], {"animation": animation})
     else:
         connection.send_error(msg["id"], "not_found", "Animation not found")
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "virtual_light_entity/list_entities"}
+)
+@callback
+def ws_list_vle_entities(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """List all VLE light entities."""
+    entities = hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {})
+    result = []
+    for eid, entity in entities.items():
+        name = getattr(entity, "name", eid) or eid
+        device_info = getattr(entity, "_attr_device_info", None)
+        if device_info and device_info.get("name"):
+            name = device_info["name"]
+        result.append({"entity_id": eid, "name": name})
+    connection.send_result(msg["id"], {"entities": result})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "virtual_light_entity/test_animation",
+        vol.Required("entity_id"): str,
+        vol.Required("loop"): bool,
+        vol.Required("steps"): list,
+    }
+)
+@websocket_api.async_response
+async def ws_test_animation(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Push a test animation directly to a VLE entity."""
+    entity_id = msg["entity_id"]
+    entities = hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {})
+    entity = entities.get(entity_id)
+    if entity is None:
+        connection.send_error(msg["id"], "not_found", f"Entity {entity_id} not found")
+        return
+
+    animation_data = {
+        "loop": msg["loop"],
+        "steps": msg["steps"],
+    }
+    entity.play_test_animation(animation_data)
+    connection.send_result(msg["id"], {"success": True})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "virtual_light_entity/stop_test",
+        vol.Required("entity_id"): str,
+    }
+)
+@callback
+def ws_stop_test(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Stop a test animation on a VLE entity."""
+    entity_id = msg["entity_id"]
+    entities = hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {})
+    entity = entities.get(entity_id)
+    if entity is None:
+        connection.send_error(msg["id"], "not_found", f"Entity {entity_id} not found")
+        return
+
+    entity.stop_test_animation()
+    connection.send_result(msg["id"], {"success": True})
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

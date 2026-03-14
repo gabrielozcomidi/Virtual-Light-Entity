@@ -63,6 +63,10 @@ class VLEAnimationEditorPanel extends HTMLElement {
     this._vleEntities = [];
     this._testEntityId = "";
 
+    // Drag and drop
+    this._dragIndex = -1;
+    this._dragOverIndex = -1;
+
     // Keyboard handler ref
     this._keyHandler = this._handleKeyboard.bind(this);
   }
@@ -200,19 +204,12 @@ class VLEAnimationEditorPanel extends HTMLElement {
 
   async _loadVLEEntities() {
     if (!this._hass) return;
-    // Find all light entities from our integration
-    this._vleEntities = Object.keys(this._hass.states)
-      .filter((eid) => {
-        if (!eid.startsWith("light.")) return false;
-        const state = this._hass.states[eid];
-        // Check if entity has effect_list attribute (indicates VLE)
-        const effects = state?.attributes?.effect_list;
-        return Array.isArray(effects);
-      })
-      .map((eid) => ({
-        entity_id: eid,
-        name: this._hass.states[eid]?.attributes?.friendly_name || eid,
-      }));
+    try {
+      const r = await this._hass.callWS({ type: "virtual_light_entity/list_entities" });
+      this._vleEntities = r.entities || [];
+    } catch (_) {
+      this._vleEntities = [];
+    }
     if (this._vleEntities.length > 0 && !this._testEntityId) {
       this._testEntityId = this._vleEntities[0].entity_id;
     }
@@ -272,27 +269,14 @@ class VLEAnimationEditorPanel extends HTMLElement {
   async _testOnEntity() {
     if (!this._hass || !this._testEntityId || this._steps.length === 0) return;
     try {
-      // Save as a temp animation, activate it, then clean up
-      const tempName = `__test_preview_${Date.now()}`;
-      await this._hass.callService("virtual_light_entity", "save_animation", {
-        name: tempName,
+      await this._hass.callWS({
+        type: "virtual_light_entity/test_animation",
+        entity_id: this._testEntityId,
         loop: this._animLoop,
         steps: this._steps,
       });
-      // Activate it on the entity
-      await this._hass.callService("light", "turn_on", {
-        entity_id: this._testEntityId,
-        effect: `\u2728 ${tempName}`,
-      });
-      this._showToast(`Testing on ${this._testEntityId}`);
-      // Clean up temp animation after a short delay (entity already loaded it)
-      setTimeout(async () => {
-        try {
-          await this._hass.callService("virtual_light_entity", "delete_animation", {
-            name: tempName,
-          });
-        } catch (_) {}
-      }, 2000);
+      const name = this._vleEntities.find((e) => e.entity_id === this._testEntityId)?.name || this._testEntityId;
+      this._showToast(`Testing on ${name}`);
     } catch (e) {
       this._showToast("Error: " + e.message);
     }
@@ -301,9 +285,9 @@ class VLEAnimationEditorPanel extends HTMLElement {
   async _stopTestOnEntity() {
     if (!this._hass || !this._testEntityId) return;
     try {
-      await this._hass.callService("light", "turn_on", {
+      await this._hass.callWS({
+        type: "virtual_light_entity/stop_test",
         entity_id: this._testEntityId,
-        effect: "Solid Color",
       });
       this._showToast("Test stopped");
     } catch (e) {
@@ -392,6 +376,62 @@ class VLEAnimationEditorPanel extends HTMLElement {
     this._steps.splice(newIndex, 0, item);
     this._dirty = true;
     this._editingIndex = newIndex;
+    this._render();
+  }
+
+  // --- Drag and drop ---
+
+  _onDragStart(e, index) {
+    this._dragIndex = index;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(index));
+    // Add a slight delay so the dragged element gets its visual
+    requestAnimationFrame(() => {
+      const items = this.shadowRoot.querySelectorAll(".step-item[data-index]");
+      if (items[index]) items[index].classList.add("dragging");
+    });
+  }
+
+  _onDragOver(e, index) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (this._dragOverIndex !== index) {
+      this._dragOverIndex = index;
+      // Update drop indicators
+      this.shadowRoot.querySelectorAll(".step-item[data-index]").forEach((el) => {
+        el.classList.remove("drag-over-above", "drag-over-below");
+      });
+      const items = this.shadowRoot.querySelectorAll(".step-item[data-index]");
+      if (items[index]) {
+        if (index < this._dragIndex) {
+          items[index].classList.add("drag-over-above");
+        } else if (index > this._dragIndex) {
+          items[index].classList.add("drag-over-below");
+        }
+      }
+    }
+  }
+
+  _onDragEnd() {
+    this._dragIndex = -1;
+    this._dragOverIndex = -1;
+    this.shadowRoot.querySelectorAll(".step-item").forEach((el) => {
+      el.classList.remove("dragging", "drag-over-above", "drag-over-below");
+    });
+  }
+
+  _onDrop(e, targetIndex) {
+    e.preventDefault();
+    const fromIndex = this._dragIndex;
+    this._onDragEnd();
+
+    if (fromIndex < 0 || fromIndex === targetIndex) return;
+
+    this._pushUndo();
+    const [item] = this._steps.splice(fromIndex, 1);
+    this._steps.splice(targetIndex, 0, item);
+    this._dirty = true;
+    this._editingIndex = targetIndex;
     this._render();
   }
 
@@ -701,10 +741,12 @@ class VLEAnimationEditorPanel extends HTMLElement {
     const ed = this._editingIndex === index;
     const canUp = index > 0;
     const canDown = index < this._steps.length - 1;
+    const dragAttr = `draggable="true" data-drag-index="${index}"`;
     if (step.type === "keyframe") {
       const [r, g, b] = step.rgb;
       const kfNum = this._kfIndex(index) + 1;
-      return `<div class="step-item ${ed ? "editing" : ""}" data-index="${index}">
+      return `<div class="step-item ${ed ? "editing" : ""}" data-index="${index}" ${dragAttr}>
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
         <span class="step-num kf">${kfNum}</span>
         <span class="color-dot" style="background:rgb(${r},${g},${b})"></span>
         <span class="step-info">RGB(${r},${g},${b}) · Bri ${step.brightness} · ${step.duration}s</span>
@@ -717,7 +759,8 @@ class VLEAnimationEditorPanel extends HTMLElement {
       const label = step.style === "fade"
         ? `Fade ${step.easing ? `(${step.easing})` : ""} ${step.duration}s`
         : "Instant";
-      return `<div class="step-item ${ed ? "editing" : ""}" data-index="${index}">
+      return `<div class="step-item ${ed ? "editing" : ""}" data-index="${index}" ${dragAttr}>
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
         <span class="step-num tr">→</span>
         <span class="step-info">${label}</span>
         <button class="icon-btn" data-move-up="${index}" title="Move up" ${canUp ? "" : "disabled"}>▲</button>
@@ -832,14 +875,22 @@ class VLEAnimationEditorPanel extends HTMLElement {
       });
     });
 
-    // Step list clicks
+    // Step list clicks + drag and drop
     this.shadowRoot.querySelectorAll(".step-item[data-index]").forEach((el) => {
+      const idx = parseInt(el.dataset.index);
       el.addEventListener("click", (e) => {
-        if (e.target.closest("[data-delete],[data-move-up],[data-move-down],[data-dup]")) return;
-        const idx = parseInt(el.dataset.index);
+        if (e.target.closest("[data-delete],[data-move-up],[data-move-down],[data-dup],.drag-handle")) return;
         this._editingIndex = this._editingIndex === idx ? -1 : idx;
         this._render();
       });
+      // Drag events
+      el.addEventListener("dragstart", (e) => this._onDragStart(e, idx));
+      el.addEventListener("dragover", (e) => this._onDragOver(e, idx));
+      el.addEventListener("dragleave", () => {
+        el.classList.remove("drag-over-above", "drag-over-below");
+      });
+      el.addEventListener("drop", (e) => this._onDrop(e, idx));
+      el.addEventListener("dragend", () => this._onDragEnd());
     });
 
     // Delete / Move / Duplicate buttons
@@ -1106,6 +1157,15 @@ class VLEAnimationEditorPanel extends HTMLElement {
       }
       .step-item:hover { background: var(--primary-background-color, #eee); }
       .step-item.editing { background: var(--primary-color, #03a9f4); color: #fff; }
+      .step-item.dragging { opacity: 0.4; }
+      .step-item.drag-over-above { border-top: 3px solid var(--primary-color, #03a9f4); margin-top: -3px; }
+      .step-item.drag-over-below { border-bottom: 3px solid var(--primary-color, #03a9f4); margin-bottom: -3px; }
+      .drag-handle {
+        cursor: grab; font-size: 16px; opacity: 0.35; user-select: none;
+        padding: 0 4px; flex-shrink: 0; line-height: 1;
+      }
+      .drag-handle:hover { opacity: 0.7; }
+      .step-item.editing .drag-handle { opacity: 0.6; }
       .step-num {
         width: 24px; height: 24px; border-radius: 50%; display: flex;
         align-items: center; justify-content: center; font-size: 12px;

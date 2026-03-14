@@ -44,6 +44,10 @@ class AnimationEngine:
         """Update available custom animations."""
         self._custom_animations = animations
 
+    def set_test_animation(self, animation_data: dict[str, Any]) -> None:
+        """Set a temporary test animation (used by the editor)."""
+        self._custom_animations["__test__"] = animation_data
+
     def start(self, effect: str) -> None:
         """Start an animation effect."""
         self.stop()

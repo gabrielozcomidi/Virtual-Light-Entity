@@ -37,6 +37,7 @@ from .const import (
     EFFECT_SOLID,
     CUSTOM_EFFECT_PREFIX,
     DATA_STORE,
+    DATA_ENTITIES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -209,6 +210,11 @@ class VirtualLight(LightEntity, RestoreEntity):
         """Restore last state when added to hass."""
         await super().async_added_to_hass()
 
+        # Register this entity for test-on-entity lookups
+        self.hass.data.setdefault(DOMAIN, {})
+        self.hass.data[DOMAIN].setdefault(DATA_ENTITIES, {})
+        self.hass.data[DOMAIN][DATA_ENTITIES][self.entity_id] = self
+
         # Sync custom animations and listen for changes
         self._sync_custom_animations()
         store = self.hass.data.get(DOMAIN, {}).get(DATA_STORE)
@@ -258,6 +264,24 @@ class VirtualLight(LightEntity, RestoreEntity):
     async def async_will_remove_from_hass(self) -> None:
         """Stop animations when entity is removed."""
         self._animation.stop()
+        # Unregister from entity lookup
+        entities = self.hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {})
+        entities.pop(self.entity_id, None)
+
+    def play_test_animation(self, animation_data: dict[str, Any]) -> None:
+        """Play a test animation directly (used by the editor panel)."""
+        self._animation.stop()
+        self._attr_is_on = True
+        self._attr_effect = "Editor Preview"
+        self._animation.set_test_animation(animation_data)
+        self._animation.start("__test__")
+        self.async_write_ha_state()
+
+    def stop_test_animation(self) -> None:
+        """Stop a test animation and revert to solid."""
+        self._animation.stop()
+        self._attr_effect = None
+        self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on the virtual light."""
