@@ -150,6 +150,9 @@ async def _register_services(hass: HomeAssistant) -> None:
                                     vol.Optional("duration", default=0): vol.All(
                                         vol.Coerce(float), vol.Range(min=0, max=30)
                                     ),
+                                    vol.Optional("easing", default="ease-in-out"): vol.In(
+                                        ["linear", "ease-in", "ease-out", "ease-in-out"]
+                                    ),
                                 }
                             ),
                         )

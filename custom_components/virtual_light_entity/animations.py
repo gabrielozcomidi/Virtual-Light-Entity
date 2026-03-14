@@ -292,6 +292,28 @@ def _ease_in_out(t: float) -> float:
     return t * t * (3.0 - 2.0 * t)
 
 
+def _ease_in(t: float) -> float:
+    """Ease in curve (accelerate)."""
+    return t * t
+
+
+def _ease_out(t: float) -> float:
+    """Ease out curve (decelerate)."""
+    return t * (2.0 - t)
+
+
+def _apply_easing(t: float, easing: str) -> float:
+    """Apply the specified easing function to a progress value."""
+    if easing == "linear":
+        return t
+    elif easing == "ease-in":
+        return _ease_in(t)
+    elif easing == "ease-out":
+        return _ease_out(t)
+    else:  # ease-in-out (default)
+        return _ease_in_out(t)
+
+
 def _interpolate_value(start: float, end: float, t: float) -> float:
     """Linearly interpolate between two values."""
     return start + (end - start) * t
@@ -381,12 +403,12 @@ async def _keyframe_animation(animation_data: dict[str, Any]):
 
                 elif style == "fade":
                     duration = float(step.get("duration", 1.0))
+                    easing = step.get("easing", "ease-in-out")
                     fade_steps = max(1, int(duration / ANIMATION_STEP_INTERVAL))
 
                     for s in range(fade_steps):
                         t = s / fade_steps
-                        # Apply ease curve for smoother fades
-                        t_smooth = _ease_in_out(t)
+                        t_smooth = _apply_easing(t, easing)
 
                         brightness = int(
                             _interpolate_value(
