@@ -1,43 +1,50 @@
 /**
- * Virtual Light Entity — Animation Editor Card
+ * Virtual Light Entity — Animation Editor Panel
  *
- * A single-page Lovelace card for creating, editing and previewing
- * custom keyframe animations.
+ * A full-page panel registered in the HA sidebar for creating,
+ * editing and previewing custom keyframe animations.
  */
 
 const MAX_DURATION = 30;
 
-class VLEAnimationEditorCard extends HTMLElement {
+class VLEAnimationEditorPanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._hass = null;
-    this._config = {};
 
     // Editor state
     this._animName = "";
     this._animLoop = true;
-    this._steps = []; // {type:"keyframe"|"transition", ...}
-    this._editingIndex = -1; // which step is being edited inline
+    this._steps = [];
+    this._editingIndex = -1;
     this._previewRunning = false;
     this._previewRAF = null;
     this._existingAnimations = [];
     this._selectedExisting = "";
     this._dirty = false;
+    this._loaded = false;
   }
 
+  // HA panel sets these properties
   set hass(hass) {
     this._hass = hass;
-    this._loadExistingAnimations();
+    if (!this._loaded) {
+      this._loaded = true;
+      this._loadExistingAnimations();
+    }
   }
 
-  setConfig(config) {
-    this._config = config;
-    this._render();
+  set narrow(val) {
+    this._narrow = val;
   }
 
-  getCardSize() {
-    return 6;
+  set route(val) {
+    this._route = val;
+  }
+
+  set panel(val) {
+    this._panel = val;
   }
 
   // --- Data helpers ---
@@ -59,16 +66,6 @@ class VLEAnimationEditorCard extends HTMLElement {
     return this._steps[this._steps.length - 1].type;
   }
 
-  _canAddTransition() {
-    return this._lastStepType() === "keyframe" && this._remaining() > 0;
-  }
-
-  _canAddKeyframe() {
-    return (
-      this._lastStepType() !== "keyframe" || this._steps.length === 0
-    ) && this._remaining() > 0;
-  }
-
   _canSave() {
     return this._animName.trim() !== "" && this._keyframeCount() >= 1;
   }
@@ -78,26 +75,11 @@ class VLEAnimationEditorCard extends HTMLElement {
   async _loadExistingAnimations() {
     if (!this._hass) return;
     try {
-      const result = await this._hass.callService(
-        "virtual_light_entity",
-        "list_animations",
-        {},
-        undefined,
-        false,
-        true
-      );
-    } catch (e) {
-      // ignore — we'll also try via WS
-    }
-
-    // Fetch via websocket API
-    try {
       const result = await this._hass.callWS({
         type: "virtual_light_entity/list_animations",
       });
       this._existingAnimations = result.animations || [];
     } catch (e) {
-      // Fallback: check store data via REST
       this._existingAnimations = [];
     }
     this._render();
@@ -105,7 +87,6 @@ class VLEAnimationEditorCard extends HTMLElement {
 
   async _saveAnimation() {
     if (!this._hass || !this._canSave()) return;
-
     try {
       await this._hass.callService("virtual_light_entity", "save_animation", {
         name: this._animName.trim(),
@@ -123,14 +104,10 @@ class VLEAnimationEditorCard extends HTMLElement {
   async _deleteAnimation(name) {
     if (!this._hass) return;
     try {
-      await this._hass.callService(
-        "virtual_light_entity",
-        "delete_animation",
-        { name }
-      );
-      if (this._animName === name) {
-        this._newAnimation();
-      }
+      await this._hass.callService("virtual_light_entity", "delete_animation", {
+        name,
+      });
+      if (this._animName === name) this._newAnimation();
       await this._loadExistingAnimations();
       this._showToast("Animation deleted.");
     } catch (e) {
@@ -200,7 +177,6 @@ class VLEAnimationEditorCard extends HTMLElement {
 
   _deleteStep(index) {
     this._steps.splice(index, 1);
-    // Clean up: if two transitions end up adjacent, remove the second
     for (let i = this._steps.length - 1; i > 0; i--) {
       if (
         this._steps[i].type === "transition" &&
@@ -209,23 +185,12 @@ class VLEAnimationEditorCard extends HTMLElement {
         this._steps.splice(i, 1);
       }
     }
-    // If first step is a transition, remove it
     if (this._steps.length > 0 && this._steps[0].type === "transition") {
       this._steps.splice(0, 1);
     }
     this._dirty = true;
-    if (this._editingIndex >= this._steps.length) {
-      this._editingIndex = -1;
-    }
+    if (this._editingIndex >= this._steps.length) this._editingIndex = -1;
     this._render();
-  }
-
-  _updateStep(index, field, value) {
-    if (this._steps[index]) {
-      this._steps[index][field] = value;
-      this._dirty = true;
-      this._render();
-    }
   }
 
   // --- Preview ---
@@ -255,58 +220,35 @@ class VLEAnimationEditorCard extends HTMLElement {
   }
 
   _getColorAtTime(t) {
-    // Walk through steps, accumulating time
-    const keyframes = [];
-    const transitions = [];
-    let timeline = []; // [{type, start, end, data}]
+    const timeline = [];
     let cursor = 0;
 
     for (const step of this._steps) {
       const dur = step.duration || 0;
-      if (step.type === "keyframe") {
-        timeline.push({
-          type: "keyframe",
-          start: cursor,
-          end: cursor + dur,
-          data: step,
-        });
-        cursor += dur;
-      } else if (step.type === "transition") {
-        timeline.push({
-          type: "transition",
-          start: cursor,
-          end: cursor + dur,
-          data: step,
-        });
-        cursor += dur;
-      }
+      timeline.push({
+        type: step.type,
+        start: cursor,
+        end: cursor + dur,
+        data: step,
+      });
+      cursor += dur;
     }
 
     if (timeline.length === 0) return { rgb: [128, 128, 128], brightness: 128 };
-
     const totalDur = cursor;
     if (totalDur <= 0) return { rgb: [128, 128, 128], brightness: 128 };
 
-    // Wrap time for looping
-    if (this._animLoop && totalDur > 0) {
-      t = t % totalDur;
-    } else {
-      t = Math.min(t, totalDur);
-    }
+    if (this._animLoop && totalDur > 0) t = t % totalDur;
+    else t = Math.min(t, totalDur);
 
-    // Find which segment we're in
     for (let i = 0; i < timeline.length; i++) {
       const seg = timeline[i];
       if (t >= seg.start && t < seg.end) {
         if (seg.type === "keyframe") {
-          return {
-            rgb: [...seg.data.rgb],
-            brightness: seg.data.brightness,
-          };
+          return { rgb: [...seg.data.rgb], brightness: seg.data.brightness };
         } else if (seg.type === "transition") {
-          // Find prev and next keyframe
-          let prevKf = null;
-          let nextKf = null;
+          let prevKf = null,
+            nextKf = null;
           for (let j = i - 1; j >= 0; j--) {
             if (timeline[j].type === "keyframe") {
               prevKf = timeline[j].data;
@@ -319,7 +261,6 @@ class VLEAnimationEditorCard extends HTMLElement {
               break;
             }
           }
-          // Wrap: if looping and no next, use first keyframe
           if (!nextKf && this._animLoop) {
             for (const s of this._steps) {
               if (s.type === "keyframe") {
@@ -328,44 +269,32 @@ class VLEAnimationEditorCard extends HTMLElement {
               }
             }
           }
-          if (!prevKf || !nextKf) {
+          if (!prevKf || !nextKf)
             return prevKf
               ? { rgb: [...prevKf.rgb], brightness: prevKf.brightness }
               : { rgb: [128, 128, 128], brightness: 128 };
-          }
 
           const dur = seg.end - seg.start;
-          if (seg.data.style === "solid" || dur <= 0) {
+          if (seg.data.style === "solid" || dur <= 0)
             return { rgb: [...nextKf.rgb], brightness: nextKf.brightness };
-          }
 
-          // Fade
           let progress = (t - seg.start) / dur;
-          // ease in-out
           progress = progress * progress * (3 - 2 * progress);
 
           return {
             rgb: [
-              Math.round(
-                prevKf.rgb[0] + (nextKf.rgb[0] - prevKf.rgb[0]) * progress
-              ),
-              Math.round(
-                prevKf.rgb[1] + (nextKf.rgb[1] - prevKf.rgb[1]) * progress
-              ),
-              Math.round(
-                prevKf.rgb[2] + (nextKf.rgb[2] - prevKf.rgb[2]) * progress
-              ),
+              Math.round(prevKf.rgb[0] + (nextKf.rgb[0] - prevKf.rgb[0]) * progress),
+              Math.round(prevKf.rgb[1] + (nextKf.rgb[1] - prevKf.rgb[1]) * progress),
+              Math.round(prevKf.rgb[2] + (nextKf.rgb[2] - prevKf.rgb[2]) * progress),
             ],
             brightness: Math.round(
-              prevKf.brightness +
-                (nextKf.brightness - prevKf.brightness) * progress
+              prevKf.brightness + (nextKf.brightness - prevKf.brightness) * progress
             ),
           };
         }
       }
     }
 
-    // Past end — return last keyframe
     const lastKf = [...this._steps].reverse().find((s) => s.type === "keyframe");
     if (lastKf) return { rgb: [...lastKf.rgb], brightness: lastKf.brightness };
     return { rgb: [128, 128, 128], brightness: 128 };
@@ -379,9 +308,8 @@ class VLEAnimationEditorCard extends HTMLElement {
     const { rgb, brightness } = this._getColorAtTime(elapsed);
     const alpha = brightness / 255;
     el.style.backgroundColor = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
-    el.style.boxShadow = `0 0 ${20 + 20 * alpha}px rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha * 0.8})`;
+    el.style.boxShadow = `0 0 ${20 + 30 * alpha}px rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha * 0.7})`;
 
-    // Update time display
     const timeEl = this.shadowRoot.querySelector(".preview-time");
     if (timeEl) {
       const total = this._totalDuration();
@@ -399,12 +327,16 @@ class VLEAnimationEditorCard extends HTMLElement {
     }
   }
 
-  // --- Render ---
-
   _rgbToHex(rgb) {
     return (
       "#" +
-      rgb.map((c) => Math.max(0, Math.min(255, c)).toString(16).padStart(2, "0")).join("")
+      rgb
+        .map((c) =>
+          Math.max(0, Math.min(255, c))
+            .toString(16)
+            .padStart(2, "0")
+        )
+        .join("")
     );
   }
 
@@ -413,6 +345,23 @@ class VLEAnimationEditorCard extends HTMLElement {
     if (!m) return [255, 255, 255];
     return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
   }
+
+  _escHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;");
+  }
+
+  _keyframeIndexOf(stepIndex) {
+    let count = 0;
+    for (let i = 0; i < stepIndex; i++) {
+      if (this._steps[i].type === "keyframe") count++;
+    }
+    return count;
+  }
+
+  // --- Render ---
 
   _render() {
     const totalDur = this._totalDuration();
@@ -428,57 +377,91 @@ class VLEAnimationEditorCard extends HTMLElement {
         :host {
           display: block;
           font-family: var(--primary-font-family, Roboto, sans-serif);
+          --editor-max-width: 900px;
         }
+
+        .panel {
+          background: var(--primary-background-color, #fafafa);
+          min-height: 100vh;
+        }
+
+        /* Top app bar */
+        .app-bar {
+          background: var(--app-header-background-color, var(--primary-color, #03a9f4));
+          color: var(--app-header-text-color, #fff);
+          height: 64px;
+          display: flex;
+          align-items: center;
+          padding: 0 16px;
+          font-size: 20px;
+          font-weight: 400;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          position: sticky;
+          top: 0;
+          z-index: 10;
+        }
+        .app-bar .back-btn {
+          background: none;
+          border: none;
+          color: inherit;
+          font-size: 24px;
+          cursor: pointer;
+          padding: 8px;
+          margin-right: 8px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .app-bar .back-btn:hover {
+          background: rgba(255,255,255,0.1);
+        }
+
+        .content {
+          max-width: var(--editor-max-width);
+          margin: 0 auto;
+          padding: 24px 16px;
+        }
+
         .card {
           background: var(--ha-card-background, var(--card-background-color, #fff));
           border-radius: var(--ha-card-border-radius, 12px);
-          padding: 16px;
-          color: var(--primary-text-color, #333);
-          box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.15));
-        }
-        .card-header {
-          font-size: 18px;
-          font-weight: 500;
-          margin-bottom: 12px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .section { margin-bottom: 16px; }
-        .section-title {
-          font-size: 13px;
-          font-weight: 500;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: var(--secondary-text-color, #666);
-          margin-bottom: 8px;
+          padding: 20px;
+          margin-bottom: 16px;
+          box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,0.1));
         }
 
-        /* Top bar: load / new */
-        .top-bar {
+        .card-title {
+          font-size: 16px;
+          font-weight: 500;
+          margin-bottom: 16px;
+          color: var(--primary-text-color, #333);
+        }
+
+        /* Top controls */
+        .top-controls {
           display: flex;
           gap: 8px;
           align-items: center;
           flex-wrap: wrap;
-          margin-bottom: 12px;
         }
-        .top-bar select, .top-bar input, .top-bar button {
+        .top-controls select {
           font-size: 14px;
-          padding: 6px 10px;
+          padding: 8px 12px;
           border-radius: 8px;
           border: 1px solid var(--divider-color, #ddd);
           background: var(--card-background-color, #fff);
           color: var(--primary-text-color, #333);
+          min-width: 160px;
         }
-        .top-bar input { flex: 1; min-width: 120px; }
 
         /* Buttons */
         button {
           cursor: pointer;
           border: none;
-          padding: 8px 14px;
+          padding: 8px 16px;
           border-radius: 8px;
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 500;
           transition: background 0.2s, opacity 0.2s;
         }
@@ -496,19 +479,19 @@ class VLEAnimationEditorCard extends HTMLElement {
           color: var(--primary-text-color, #333);
         }
         .btn-outline:hover:not(:disabled) { background: var(--secondary-background-color, #f5f5f5); }
-        .btn-small { padding: 4px 10px; font-size: 12px; }
+        .btn-small { padding: 6px 12px; font-size: 13px; }
 
-        /* Name / loop row */
+        /* Name / loop */
         .name-row {
           display: flex;
-          gap: 10px;
+          gap: 12px;
           align-items: center;
-          margin-bottom: 12px;
+          margin-top: 16px;
         }
         .name-row input[type="text"] {
           flex: 1;
-          font-size: 15px;
-          padding: 8px 12px;
+          font-size: 16px;
+          padding: 10px 14px;
           border-radius: 8px;
           border: 1px solid var(--divider-color, #ddd);
           background: var(--card-background-color, #fff);
@@ -517,20 +500,24 @@ class VLEAnimationEditorCard extends HTMLElement {
         .name-row label {
           display: flex;
           align-items: center;
-          gap: 4px;
-          font-size: 13px;
+          gap: 6px;
+          font-size: 14px;
           white-space: nowrap;
+          color: var(--primary-text-color, #333);
+        }
+        .name-row input[type="checkbox"] {
+          width: 18px;
+          height: 18px;
         }
 
-        /* Timeline visual */
+        /* Timeline */
         .timeline {
           display: flex;
           align-items: stretch;
-          min-height: 50px;
-          border-radius: 8px;
+          min-height: 56px;
+          border-radius: 10px;
           overflow: hidden;
           border: 1px solid var(--divider-color, #ddd);
-          margin-bottom: 4px;
           position: relative;
         }
         .timeline-empty {
@@ -539,16 +526,16 @@ class VLEAnimationEditorCard extends HTMLElement {
           justify-content: center;
           width: 100%;
           color: var(--secondary-text-color, #999);
-          font-size: 13px;
+          font-size: 14px;
           font-style: italic;
-          padding: 16px;
+          padding: 20px;
         }
         .tl-block {
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          min-width: 32px;
+          min-width: 36px;
           position: relative;
           cursor: pointer;
           transition: opacity 0.15s;
@@ -556,52 +543,56 @@ class VLEAnimationEditorCard extends HTMLElement {
           box-sizing: border-box;
         }
         .tl-block:hover { opacity: 0.85; }
-        .tl-block.editing { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: -2px; }
+        .tl-block.editing {
+          outline: 3px solid var(--primary-color, #03a9f4);
+          outline-offset: -3px;
+          z-index: 1;
+        }
         .tl-block .tl-label {
-          font-size: 10px;
+          font-size: 11px;
+          font-weight: 500;
           color: inherit;
           text-shadow: 0 1px 2px rgba(0,0,0,0.5);
           text-align: center;
           line-height: 1.2;
         }
         .tl-block .tl-dur {
-          font-size: 9px;
+          font-size: 10px;
           opacity: 0.8;
         }
         .tl-trans {
-          min-width: 24px;
-          max-width: 50px;
+          min-width: 28px;
+          max-width: 60px;
           display: flex;
           align-items: center;
           justify-content: center;
         }
         .tl-trans .tl-label {
-          font-size: 9px;
+          font-size: 10px;
           writing-mode: vertical-rl;
           text-orientation: mixed;
           color: var(--secondary-text-color, #888);
+          text-shadow: none;
         }
 
-        /* Duration bar */
         .duration-bar {
           display: flex;
           justify-content: space-between;
-          font-size: 11px;
+          font-size: 12px;
           color: var(--secondary-text-color, #888);
-          margin-bottom: 12px;
+          margin-top: 6px;
         }
 
         /* Step list */
-        .step-list { margin-bottom: 12px; }
         .step-item {
           display: flex;
           align-items: center;
-          gap: 8px;
-          padding: 8px 10px;
+          gap: 10px;
+          padding: 10px 12px;
           margin-bottom: 4px;
           border-radius: 8px;
           background: var(--secondary-background-color, #f5f5f5);
-          font-size: 13px;
+          font-size: 14px;
           cursor: pointer;
           transition: background 0.15s;
         }
@@ -610,231 +601,265 @@ class VLEAnimationEditorCard extends HTMLElement {
           background: var(--primary-color, #03a9f4);
           color: #fff;
         }
-        .step-item .step-num {
-          width: 22px;
-          height: 22px;
+        .step-num {
+          width: 24px;
+          height: 24px;
           border-radius: 50%;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 11px;
+          font-size: 12px;
           font-weight: 600;
           flex-shrink: 0;
         }
-        .step-item .step-num.kf { background: var(--primary-color, #03a9f4); color: #fff; }
+        .step-num.kf { background: var(--primary-color, #03a9f4); color: #fff; }
         .step-item.editing .step-num.kf { background: #fff; color: var(--primary-color, #03a9f4); }
-        .step-item .step-num.tr { background: var(--divider-color, #ddd); color: var(--primary-text-color, #333); }
-        .step-item .step-info { flex: 1; }
-        .step-item .color-dot {
-          width: 18px;
-          height: 18px;
+        .step-num.tr { background: var(--divider-color, #ddd); color: var(--primary-text-color, #333); }
+        .step-info { flex: 1; }
+        .color-dot {
+          width: 20px;
+          height: 20px;
           border-radius: 50%;
           border: 2px solid rgba(255,255,255,0.5);
           flex-shrink: 0;
         }
-        .step-item .delete-btn {
+        .delete-btn {
           background: none;
           border: none;
           color: var(--error-color, #ef5350);
-          font-size: 16px;
-          padding: 2px 6px;
+          font-size: 18px;
+          padding: 2px 8px;
           cursor: pointer;
-          opacity: 0.6;
+          opacity: 0.5;
         }
-        .step-item .delete-btn:hover { opacity: 1; }
+        .delete-btn:hover { opacity: 1; }
 
         /* Inline editor */
         .inline-editor {
-          padding: 12px;
-          margin-bottom: 8px;
-          border-radius: 8px;
+          padding: 16px;
+          margin: 8px 0;
+          border-radius: 10px;
           background: var(--secondary-background-color, #f5f5f5);
           border: 1px solid var(--divider-color, #ddd);
         }
         .inline-editor .field {
           display: flex;
           align-items: center;
-          gap: 10px;
-          margin-bottom: 8px;
+          gap: 12px;
+          margin-bottom: 10px;
         }
         .inline-editor .field:last-child { margin-bottom: 0; }
         .inline-editor label {
-          font-size: 13px;
-          min-width: 80px;
+          font-size: 14px;
+          min-width: 90px;
           color: var(--secondary-text-color, #666);
         }
         .inline-editor input[type="color"] {
-          width: 40px;
-          height: 32px;
+          width: 44px;
+          height: 36px;
           border: none;
-          border-radius: 6px;
+          border-radius: 8px;
           cursor: pointer;
           padding: 0;
         }
         .inline-editor input[type="range"] { flex: 1; }
         .inline-editor input[type="number"] {
-          width: 80px;
-          padding: 4px 8px;
-          border-radius: 6px;
+          width: 90px;
+          padding: 6px 10px;
+          border-radius: 8px;
           border: 1px solid var(--divider-color, #ddd);
-          font-size: 13px;
+          font-size: 14px;
           background: var(--card-background-color, #fff);
           color: var(--primary-text-color, #333);
         }
         .inline-editor select {
-          padding: 4px 8px;
-          border-radius: 6px;
+          padding: 6px 10px;
+          border-radius: 8px;
           border: 1px solid var(--divider-color, #ddd);
-          font-size: 13px;
+          font-size: 14px;
           background: var(--card-background-color, #fff);
           color: var(--primary-text-color, #333);
         }
-        .inline-editor .field-val {
-          font-size: 13px;
-          min-width: 30px;
+        .field-val {
+          font-size: 14px;
+          min-width: 36px;
           text-align: right;
+          color: var(--primary-text-color, #333);
         }
 
-        /* Action buttons row */
         .actions {
           display: flex;
           gap: 8px;
           flex-wrap: wrap;
-          margin-bottom: 12px;
+          margin-top: 12px;
         }
 
         /* Preview */
-        .preview-section {
-          margin-top: 8px;
-        }
-        .preview-container {
+        .preview-row {
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 16px;
         }
         .preview-light {
-          width: 60px;
-          height: 60px;
+          width: 80px;
+          height: 80px;
           border-radius: 50%;
-          background: #333;
+          background: #222;
           transition: background-color 0.08s, box-shadow 0.08s;
           border: 2px solid var(--divider-color, #ddd);
           flex-shrink: 0;
         }
         .preview-gradient {
           flex: 1;
-          height: 30px;
-          border-radius: 6px;
+          height: 36px;
+          border-radius: 8px;
           border: 1px solid var(--divider-color, #ddd);
+          background: var(--secondary-background-color, #eee);
         }
         .preview-controls {
           display: flex;
-          gap: 8px;
+          gap: 10px;
           align-items: center;
-          margin-top: 8px;
+          margin-top: 12px;
         }
         .preview-time {
-          font-size: 12px;
+          font-size: 13px;
           color: var(--secondary-text-color, #888);
           font-variant-numeric: tabular-nums;
+        }
+
+        /* Save bar */
+        .save-bar {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+        }
+        .save-bar .btn-primary {
+          padding: 10px 28px;
+          font-size: 15px;
+        }
+        .dirty-badge {
+          font-size: 12px;
+          color: var(--warning-color, #ff9800);
+          font-style: italic;
         }
 
         /* Toast */
         .toast {
           position: fixed;
-          bottom: 20px;
+          bottom: 24px;
           left: 50%;
           transform: translateX(-50%) translateY(100px);
           background: var(--primary-color, #03a9f4);
           color: #fff;
-          padding: 10px 20px;
-          border-radius: 8px;
+          padding: 12px 24px;
+          border-radius: 10px;
           font-size: 14px;
           transition: transform 0.3s;
           z-index: 999;
           pointer-events: none;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.2);
         }
         .toast.show { transform: translateX(-50%) translateY(0); }
       </style>
 
-      <div class="card">
-        <div class="card-header">Animation Editor</div>
-
-        <!-- Load existing / New -->
-        <div class="top-bar">
-          <select id="anim-select">
-            <option value="">-- Load animation --</option>
-            ${this._existingAnimations
-              .map((a) => `<option value="${a}" ${a === this._selectedExisting ? "selected" : ""}>${a}</option>`)
-              .join("")}
-          </select>
-          <button class="btn-outline btn-small" id="btn-load">Load</button>
-          <button class="btn-outline btn-small" id="btn-new">New</button>
-          ${
-            this._selectedExisting
-              ? `<button class="btn-danger btn-small" id="btn-delete-anim">Delete</button>`
-              : ""
-          }
-        </div>
-
-        <!-- Name & Loop -->
-        <div class="name-row">
-          <input type="text" id="anim-name" placeholder="Animation name"
-                 value="${this._escHtml(this._animName)}" />
-          <label>
-            <input type="checkbox" id="anim-loop" ${this._animLoop ? "checked" : ""} />
-            Loop
-          </label>
-        </div>
-
-        <!-- Visual timeline -->
-        <div class="section">
-          <div class="section-title">Timeline</div>
-          <div class="timeline" id="timeline">
-            ${this._steps.length === 0 ? `<div class="timeline-empty">Add a keyframe to start</div>` : this._renderTimeline()}
-          </div>
-          <div class="duration-bar">
-            <span>${totalDur.toFixed(1)}s total</span>
-            <span>${remaining.toFixed(1)}s remaining (max ${MAX_DURATION}s)</span>
-          </div>
-        </div>
-
-        <!-- Step list with inline editing -->
-        <div class="section">
-          <div class="section-title">Steps</div>
-          <div class="step-list" id="step-list">
-            ${this._steps.map((s, i) => this._renderStepItem(s, i)).join("")}
-          </div>
-          ${this._editingIndex >= 0 ? this._renderInlineEditor(this._editingIndex) : ""}
-
-          <div class="actions">
-            <button class="btn-primary btn-small" id="btn-add-kf"
-                    ${canAddKf ? "" : "disabled"}>+ Keyframe</button>
-            <button class="btn-outline btn-small" id="btn-add-trans"
-                    ${canAddTrans ? "" : "disabled"}>+ Transition</button>
-          </div>
-        </div>
-
-        <!-- Preview -->
-        <div class="section preview-section">
-          <div class="section-title">Preview</div>
-          <div class="preview-container">
-            <div class="preview-light"></div>
-            <div class="preview-gradient" id="preview-gradient"></div>
-          </div>
-          <div class="preview-controls">
-            <button class="btn-outline btn-small" id="btn-preview">
-              ${this._previewRunning ? "Stop" : "Play"}
-            </button>
-            <span class="preview-time"></span>
-          </div>
-        </div>
-
-        <!-- Save -->
-        <div class="actions" style="margin-top: 12px;">
-          <button class="btn-primary" id="btn-save" ${canSave ? "" : "disabled"}>
-            Save Animation
+      <div class="panel">
+        <div class="app-bar">
+          <button class="back-btn" id="btn-back" title="Back">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+            </svg>
           </button>
+          Animation Editor
+        </div>
+
+        <div class="content">
+          <!-- Load / New -->
+          <div class="card">
+            <div class="card-title">Manage Animations</div>
+            <div class="top-controls">
+              <select id="anim-select">
+                <option value="">-- Select animation --</option>
+                ${this._existingAnimations
+                  .map(
+                    (a) =>
+                      `<option value="${this._escHtml(a)}" ${a === this._selectedExisting ? "selected" : ""}>${this._escHtml(a)}</option>`
+                  )
+                  .join("")}
+              </select>
+              <button class="btn-primary btn-small" id="btn-load">Load</button>
+              <button class="btn-outline btn-small" id="btn-new">New</button>
+              ${
+                this._selectedExisting
+                  ? `<button class="btn-danger btn-small" id="btn-delete-anim">Delete</button>`
+                  : ""
+              }
+            </div>
+            <div class="name-row">
+              <input type="text" id="anim-name" placeholder="Animation name"
+                     value="${this._escHtml(this._animName)}" />
+              <label>
+                <input type="checkbox" id="anim-loop" ${this._animLoop ? "checked" : ""} />
+                Loop
+              </label>
+            </div>
+          </div>
+
+          <!-- Timeline -->
+          <div class="card">
+            <div class="card-title">Timeline</div>
+            <div class="timeline" id="timeline">
+              ${
+                this._steps.length === 0
+                  ? `<div class="timeline-empty">Add a keyframe to start building your animation</div>`
+                  : this._renderTimeline()
+              }
+            </div>
+            <div class="duration-bar">
+              <span>${totalDur.toFixed(1)}s total</span>
+              <span>${remaining.toFixed(1)}s remaining (max ${MAX_DURATION}s)</span>
+            </div>
+          </div>
+
+          <!-- Steps -->
+          <div class="card">
+            <div class="card-title">Steps</div>
+            <div id="step-list">
+              ${this._steps.map((s, i) => this._renderStepItem(s, i)).join("")}
+            </div>
+            ${this._editingIndex >= 0 ? this._renderInlineEditor(this._editingIndex) : ""}
+            <div class="actions">
+              <button class="btn-primary btn-small" id="btn-add-kf"
+                      ${canAddKf ? "" : "disabled"}>+ Keyframe</button>
+              <button class="btn-outline btn-small" id="btn-add-trans"
+                      ${canAddTrans ? "" : "disabled"}>+ Transition</button>
+            </div>
+          </div>
+
+          <!-- Preview -->
+          <div class="card">
+            <div class="card-title">Preview</div>
+            <div class="preview-row">
+              <div class="preview-light"></div>
+              <div class="preview-gradient" id="preview-gradient"></div>
+            </div>
+            <div class="preview-controls">
+              <button class="btn-outline btn-small" id="btn-preview">
+                ${this._previewRunning ? "Stop" : "Play Preview"}
+              </button>
+              <span class="preview-time"></span>
+            </div>
+          </div>
+
+          <!-- Save -->
+          <div class="card">
+            <div class="save-bar">
+              <button class="btn-primary" id="btn-save" ${canSave ? "" : "disabled"}>
+                Save Animation
+              </button>
+              ${this._dirty ? `<span class="dirty-badge">Unsaved changes</span>` : ""}
+            </div>
+          </div>
         </div>
 
         <div class="toast"></div>
@@ -843,10 +868,6 @@ class VLEAnimationEditorCard extends HTMLElement {
 
     this._renderGradientPreview();
     this._bindEvents();
-  }
-
-  _escHtml(str) {
-    return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   }
 
   _renderTimeline() {
@@ -858,7 +879,8 @@ class VLEAnimationEditorCard extends HTMLElement {
         const pct = ((s.duration || 0.2) / Math.max(total, 0.1)) * 100;
         if (s.type === "keyframe") {
           const [r, g, b] = s.rgb;
-          const textColor = r * 0.299 + g * 0.587 + b * 0.114 > 150 ? "#000" : "#fff";
+          const textColor =
+            r * 0.299 + g * 0.587 + b * 0.114 > 150 ? "#000" : "#fff";
           return `<div class="tl-block ${i === this._editingIndex ? "editing" : ""}"
                        data-index="${i}"
                        style="width:${Math.max(pct, 5)}%;background:rgb(${r},${g},${b});color:${textColor}">
@@ -866,10 +888,13 @@ class VLEAnimationEditorCard extends HTMLElement {
             <span class="tl-label tl-dur">${(s.duration || 0).toFixed(1)}s</span>
           </div>`;
         } else {
-          const style = s.style === "fade" ? "background:repeating-linear-gradient(90deg,var(--divider-color,#ccc) 0,var(--divider-color,#ccc) 3px,transparent 3px,transparent 6px)" : "background:var(--divider-color,#ccc)";
+          const bg =
+            s.style === "fade"
+              ? "background:repeating-linear-gradient(90deg,var(--divider-color,#ccc) 0,var(--divider-color,#ccc) 3px,transparent 3px,transparent 6px)"
+              : "background:var(--divider-color,#ccc)";
           return `<div class="tl-block tl-trans ${i === this._editingIndex ? "editing" : ""}"
                        data-index="${i}"
-                       style="width:${Math.max(pct, 3)}%;${style}">
+                       style="width:${Math.max(pct, 3)}%;${bg}">
             <span class="tl-label">${s.style === "fade" ? "~" : "|"}</span>
           </div>`;
         }
@@ -877,17 +902,8 @@ class VLEAnimationEditorCard extends HTMLElement {
       .join("");
   }
 
-  _keyframeIndexOf(stepIndex) {
-    let count = 0;
-    for (let i = 0; i < stepIndex; i++) {
-      if (this._steps[i].type === "keyframe") count++;
-    }
-    return count;
-  }
-
   _renderStepItem(step, index) {
     const isEditing = this._editingIndex === index;
-
     if (step.type === "keyframe") {
       const [r, g, b] = step.rgb;
       const kfNum = this._keyframeIndexOf(index) + 1;
@@ -956,18 +972,15 @@ class VLEAnimationEditorCard extends HTMLElement {
   _renderGradientPreview() {
     const el = this.shadowRoot.querySelector("#preview-gradient");
     if (!el || this._steps.length === 0) return;
-
     const totalDur = this._totalDuration();
     if (totalDur <= 0) return;
 
-    // Build CSS gradient from the timeline
     const stops = [];
-    const numSamples = 40;
-    for (let i = 0; i <= numSamples; i++) {
-      const t = (i / numSamples) * totalDur;
+    const n = 50;
+    for (let i = 0; i <= n; i++) {
+      const t = (i / n) * totalDur;
       const { rgb } = this._getColorAtTime(t);
-      const pct = (i / numSamples) * 100;
-      stops.push(`rgb(${rgb[0]},${rgb[1]},${rgb[2]}) ${pct}%`);
+      stops.push(`rgb(${rgb[0]},${rgb[1]},${rgb[2]}) ${(i / n) * 100}%`);
     }
     el.style.background = `linear-gradient(90deg, ${stops.join(", ")})`;
   }
@@ -975,42 +988,38 @@ class VLEAnimationEditorCard extends HTMLElement {
   _bindEvents() {
     const $ = (sel) => this.shadowRoot.querySelector(sel);
 
-    // Load existing
-    const selEl = $("#anim-select");
-    const btnLoad = $("#btn-load");
-    const btnNew = $("#btn-new");
-    const btnDeleteAnim = $("#btn-delete-anim");
+    // Back button
+    const btnBack = $("#btn-back");
+    if (btnBack) {
+      btnBack.addEventListener("click", () => {
+        history.back();
+      });
+    }
 
-    if (btnLoad) {
-      btnLoad.addEventListener("click", () => {
-        const val = selEl?.value;
-        if (val) this._loadAnimation(val);
-      });
-    }
-    if (btnNew) btnNew.addEventListener("click", () => this._newAnimation());
-    if (btnDeleteAnim) {
-      btnDeleteAnim.addEventListener("click", () => {
-        if (this._selectedExisting && confirm(`Delete "${this._selectedExisting}"?`)) {
-          this._deleteAnimation(this._selectedExisting);
-        }
-      });
-    }
+    // Load / New / Delete
+    const selEl = $("#anim-select");
+    $("#btn-load")?.addEventListener("click", () => {
+      if (selEl?.value) this._loadAnimation(selEl.value);
+    });
+    $("#btn-new")?.addEventListener("click", () => this._newAnimation());
+    $("#btn-delete-anim")?.addEventListener("click", () => {
+      if (
+        this._selectedExisting &&
+        confirm(`Delete "${this._selectedExisting}"?`)
+      ) {
+        this._deleteAnimation(this._selectedExisting);
+      }
+    });
 
     // Name & loop
-    const nameInput = $("#anim-name");
-    const loopInput = $("#anim-loop");
-    if (nameInput) {
-      nameInput.addEventListener("input", (e) => {
-        this._animName = e.target.value;
-        this._dirty = true;
-      });
-    }
-    if (loopInput) {
-      loopInput.addEventListener("change", (e) => {
-        this._animLoop = e.target.checked;
-        this._dirty = true;
-      });
-    }
+    $("#anim-name")?.addEventListener("input", (e) => {
+      this._animName = e.target.value;
+      this._dirty = true;
+    });
+    $("#anim-loop")?.addEventListener("change", (e) => {
+      this._animLoop = e.target.checked;
+      this._dirty = true;
+    });
 
     // Timeline clicks
     this.shadowRoot.querySelectorAll(".tl-block[data-index]").forEach((el) => {
@@ -1039,97 +1048,90 @@ class VLEAnimationEditorCard extends HTMLElement {
       });
     });
 
-    // Inline editor bindings
+    // Inline editor
     if (this._editingIndex >= 0) {
       const step = this._steps[this._editingIndex];
       if (step?.type === "keyframe") {
         const colorInput = $("#edit-color");
         const briInput = $("#edit-brightness");
         const durInput = $("#edit-duration");
-        const colorText = $("#edit-color-text");
-        const briVal = $("#edit-brightness-val");
 
-        if (colorInput) {
-          colorInput.addEventListener("input", (e) => {
-            const rgb = this._hexToRgb(e.target.value);
-            this._steps[this._editingIndex].rgb = rgb;
-            this._dirty = true;
-            if (colorText) colorText.textContent = e.target.value;
-            this._softUpdate();
-          });
-        }
-        if (briInput) {
-          briInput.addEventListener("input", (e) => {
-            this._steps[this._editingIndex].brightness = parseInt(e.target.value);
-            this._dirty = true;
-            if (briVal) briVal.textContent = e.target.value;
-          });
-        }
-        if (durInput) {
-          durInput.addEventListener("change", (e) => {
-            const val = Math.max(0.1, Math.min(parseFloat(e.target.value) || 0.1, this._remaining() + step.duration));
-            this._steps[this._editingIndex].duration = val;
-            this._dirty = true;
-            this._render();
-          });
-        }
+        colorInput?.addEventListener("input", (e) => {
+          this._steps[this._editingIndex].rgb = this._hexToRgb(e.target.value);
+          this._dirty = true;
+          const ct = $("#edit-color-text");
+          if (ct) ct.textContent = e.target.value;
+          this._softUpdate();
+        });
+        briInput?.addEventListener("input", (e) => {
+          this._steps[this._editingIndex].brightness = parseInt(e.target.value);
+          this._dirty = true;
+          const bv = $("#edit-brightness-val");
+          if (bv) bv.textContent = e.target.value;
+        });
+        durInput?.addEventListener("change", (e) => {
+          const val = Math.max(
+            0.1,
+            Math.min(
+              parseFloat(e.target.value) || 0.1,
+              this._remaining() + step.duration
+            )
+          );
+          this._steps[this._editingIndex].duration = val;
+          this._dirty = true;
+          this._render();
+        });
       } else if (step?.type === "transition") {
-        const styleInput = $("#edit-style");
-        const durInput = $("#edit-trans-dur");
-
-        if (styleInput) {
-          styleInput.addEventListener("change", (e) => {
-            this._steps[this._editingIndex].style = e.target.value;
-            if (e.target.value === "solid") {
-              this._steps[this._editingIndex].duration = 0;
-            } else {
-              this._steps[this._editingIndex].duration = Math.min(1.0, this._remaining());
-            }
-            this._dirty = true;
-            this._render();
-          });
-        }
-        if (durInput) {
-          durInput.addEventListener("change", (e) => {
-            const val = Math.max(0.1, Math.min(parseFloat(e.target.value) || 0.1, this._remaining() + step.duration));
-            this._steps[this._editingIndex].duration = val;
-            this._dirty = true;
-            this._render();
-          });
-        }
+        $("#edit-style")?.addEventListener("change", (e) => {
+          this._steps[this._editingIndex].style = e.target.value;
+          if (e.target.value === "solid") {
+            this._steps[this._editingIndex].duration = 0;
+          } else {
+            this._steps[this._editingIndex].duration = Math.min(
+              1.0,
+              this._remaining()
+            );
+          }
+          this._dirty = true;
+          this._render();
+        });
+        $("#edit-trans-dur")?.addEventListener("change", (e) => {
+          const val = Math.max(
+            0.1,
+            Math.min(
+              parseFloat(e.target.value) || 0.1,
+              this._remaining() + step.duration
+            )
+          );
+          this._steps[this._editingIndex].duration = val;
+          this._dirty = true;
+          this._render();
+        });
       }
     }
 
     // Add buttons
-    const btnAddKf = $("#btn-add-kf");
-    const btnAddTrans = $("#btn-add-trans");
-    if (btnAddKf) btnAddKf.addEventListener("click", () => this._addKeyframe());
-    if (btnAddTrans) btnAddTrans.addEventListener("click", () => this._addTransition());
+    $("#btn-add-kf")?.addEventListener("click", () => this._addKeyframe());
+    $("#btn-add-trans")?.addEventListener("click", () => this._addTransition());
 
     // Preview
-    const btnPreview = $("#btn-preview");
-    if (btnPreview) {
-      btnPreview.addEventListener("click", () => {
-        if (this._previewRunning) {
-          this._stopPreview();
-          this._render();
-        } else {
-          this._startPreview();
-        }
-      });
-    }
+    $("#btn-preview")?.addEventListener("click", () => {
+      if (this._previewRunning) {
+        this._stopPreview();
+        this._render();
+      } else {
+        this._startPreview();
+      }
+    });
 
     // Save
-    const btnSave = $("#btn-save");
-    if (btnSave) btnSave.addEventListener("click", () => this._saveAnimation());
+    $("#btn-save")?.addEventListener("click", () => this._saveAnimation());
   }
 
   _softUpdate() {
-    // Update just the timeline and gradient without full re-render
     const timeline = this.shadowRoot.querySelector("#timeline");
     if (timeline && this._steps.length > 0) {
       timeline.innerHTML = this._renderTimeline();
-      // Rebind timeline clicks
       this.shadowRoot.querySelectorAll(".tl-block[data-index]").forEach((el) => {
         el.addEventListener("click", () => {
           const idx = parseInt(el.dataset.index);
@@ -1142,11 +1144,4 @@ class VLEAnimationEditorCard extends HTMLElement {
   }
 }
 
-customElements.define("vle-animation-editor", VLEAnimationEditorCard);
-
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "vle-animation-editor",
-  name: "Virtual Light Animation Editor",
-  description: "Create and edit custom keyframe animations for Virtual Light entities",
-});
+customElements.define("vle-animation-editor-panel", VLEAnimationEditorPanel);

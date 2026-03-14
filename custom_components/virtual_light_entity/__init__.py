@@ -8,7 +8,7 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components import websocket_api
+from homeassistant.components import frontend, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
@@ -18,10 +18,14 @@ from .const import DOMAIN, PLATFORMS, DATA_STORE
 
 _LOGGER = logging.getLogger(__name__)
 
-FRONTEND_URL = "/virtual_light_entity/animation-editor-card.js"
-FRONTEND_PATH = str(Path(__file__).parent / "frontend" / "animation-editor-card.js")
+PANEL_URL = "/virtual_light_entity/animation-editor-panel.js"
+PANEL_PATH = str(Path(__file__).parent / "frontend" / "animation-editor-card.js")
+PANEL_NAME = "vle-animation-editor-panel"
+PANEL_TITLE = "Animation Editor"
+PANEL_ICON = "mdi:palette-advanced"
+PANEL_FRONTEND_PATH = "virtual-light-editor"
 
-# Track whether global setup (services, frontend, WS) has been done
+# Track whether global setup has been done
 DATA_SETUP_DONE = "setup_done"
 
 
@@ -30,7 +34,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = entry.data
 
-    # One-time global setup: store, services, frontend, websocket
+    # One-time global setup: store, services, frontend panel, websocket
     if not hass.data[DOMAIN].get(DATA_SETUP_DONE):
         await _async_global_setup(hass)
         hass.data[DOMAIN][DATA_SETUP_DONE] = True
@@ -43,7 +47,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_global_setup(hass: HomeAssistant) -> None:
-    """Perform one-time setup: store, services, frontend, websocket API."""
+    """Perform one-time setup: store, services, sidebar panel, websocket API."""
     from .store import AnimationStore
 
     # Animation store
@@ -52,13 +56,25 @@ async def _async_global_setup(hass: HomeAssistant) -> None:
         await store.async_load()
         hass.data[DOMAIN][DATA_STORE] = store
 
-    # Serve frontend card JS
+    # Serve the panel JS file
     await hass.http.async_register_static_paths(
-        [StaticPathConfig(FRONTEND_URL, FRONTEND_PATH, cache_headers=False)]
+        [StaticPathConfig(PANEL_URL, PANEL_PATH, cache_headers=False)]
     )
-    _LOGGER.info(
-        "Animation Editor card JS served at %s — add it as a Lovelace resource",
-        FRONTEND_URL,
+
+    # Register sidebar panel
+    frontend.async_register_built_in_panel(
+        hass,
+        component_name="custom",
+        sidebar_title=PANEL_TITLE,
+        sidebar_icon=PANEL_ICON,
+        frontend_url_path=PANEL_FRONTEND_PATH,
+        config={
+            "_panel_custom": {
+                "name": PANEL_NAME,
+                "module_url": PANEL_URL,
+            }
+        },
+        require_admin=False,
     )
 
     # Register websocket commands

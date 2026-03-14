@@ -59,25 +59,11 @@ ALL_EFFECTS = [
 # Animation timing (seconds)
 ANIMATION_STEP_INTERVAL = 0.1
 
-# Custom animation config keys
-CONF_ANIM_NAME = "animation_name"
-CONF_ANIM_LOOP = "animation_loop"
-CONF_ANIM_KF_RGB = "keyframe_rgb"
-CONF_ANIM_KF_BRIGHTNESS = "keyframe_brightness"
-CONF_ANIM_KF_DURATION = "keyframe_duration"
-CONF_ANIM_TRANS_STYLE = "transition_style"
-CONF_ANIM_TRANS_DURATION = "transition_duration"
+# Options flow keys (delete animation)
 CONF_ANIM_SELECT = "animation_select"
-
-# Transition styles
-TRANSITION_SOLID = "solid"
-TRANSITION_FADE = "fade"
 
 # Store key
 DATA_STORE = "store"
 
 # Custom animation prefix for effect names
 CUSTOM_EFFECT_PREFIX = "\u2728 "
-
-# Max animation total duration
-MAX_ANIMATION_DURATION = 30.0

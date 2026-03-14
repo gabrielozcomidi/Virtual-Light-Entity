@@ -30,11 +30,10 @@
     "step": {
       "init": {
         "title": "Virtual Light Options",
-        "description": "Manage light settings and animations.\n\nTo create animations visually, add the **Animation Editor** card to your dashboard.",
+        "description": "Manage your virtual light settings.\n\nTo create or edit custom animations, use the **Animation Editor** in the sidebar.",
         "menu_options": {
           "light_settings": "Light Settings",
-          "create_animation": "Create Animation (Basic)",
-          "delete_animation": "Delete Animation"
+          "delete_animation": "Delete Custom Animation"
         }
       },
       "light_settings": {
@@ -47,40 +46,6 @@
           "initial_brightness": "Default Brightness"
         }
       },
-      "create_animation": {
-        "title": "Create Custom Animation",
-        "description": "Design a new keyframe animation. For the full visual editor, use the Animation Editor card on your dashboard.",
-        "data": {
-          "animation_name": "Animation Name",
-          "animation_loop": "Loop Animation"
-        }
-      },
-      "animation_builder": {
-        "title": "Animation Builder — {name}",
-        "description": "Build your animation by adding keyframes and transitions.\n\n{timeline}",
-        "menu_options": {
-          "add_keyframe": "Add Keyframe",
-          "add_transition": "Add Transition",
-          "save_animation": "Save Animation"
-        }
-      },
-      "add_keyframe": {
-        "title": "Add Keyframe",
-        "description": "Set the color, brightness, and hold duration for this keyframe. ({remaining}s remaining)",
-        "data": {
-          "keyframe_rgb": "Color",
-          "keyframe_brightness": "Brightness",
-          "keyframe_duration": "Hold Duration"
-        }
-      },
-      "add_transition": {
-        "title": "Add Transition",
-        "description": "Set how the light transitions to the next keyframe. ({remaining}s remaining)",
-        "data": {
-          "transition_style": "Transition Style",
-          "transition_duration": "Fade Duration (only for Fade)"
-        }
-      },
       "delete_animation": {
         "title": "Delete Custom Animation",
         "description": "Select a custom animation to delete.",
@@ -89,14 +54,9 @@
         }
       }
     },
-    "error": {
-      "name_conflict": "This name conflicts with a built-in effect.",
-      "name_empty": "Please enter an animation name.",
-      "exceeds_max_duration": "Duration exceeds the 30-second maximum."
-    },
     "abort": {
       "store_not_available": "Animation store is not available. Try reloading the integration.",
-      "no_custom_animations": "No custom animations have been created yet."
+      "no_custom_animations": "No custom animations have been created yet. Use the Animation Editor in the sidebar to create one."
     }
   }
 }
