@@ -28,6 +28,7 @@ COLOR_MODE_OPTIONS = {
 }
 
 # Animation effects
+EFFECT_SOLID = "Solid Color"
 EFFECT_CANDLE = "Candle Flicker"
 EFFECT_BREATHING = "Breathing"
 EFFECT_COLOR_LOOP = "Color Loop"
@@ -41,6 +42,7 @@ EFFECT_OCEAN = "Ocean Wave"
 EFFECT_AURORA = "Aurora"
 
 ALL_EFFECTS = [
+    EFFECT_SOLID,
     EFFECT_CANDLE,
     EFFECT_BREATHING,
     EFFECT_COLOR_LOOP,

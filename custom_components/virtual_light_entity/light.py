@@ -34,6 +34,7 @@ from .const import (
     CONF_INITIAL_BRIGHTNESS,
     DEFAULT_INITIAL_STATE,
     DEFAULT_INITIAL_BRIGHTNESS,
+    EFFECT_SOLID,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -254,7 +255,11 @@ class VirtualLight(LightEntity, RestoreEntity):
 
         if ATTR_EFFECT in kwargs:
             effect = kwargs[ATTR_EFFECT]
-            if effect and effect in (self._attr_effect_list or []):
+            if effect == EFFECT_SOLID:
+                # Stop animation, keep current color/brightness
+                self._attr_effect = EFFECT_SOLID
+                self._animation.stop()
+            elif effect and effect in (self._attr_effect_list or []):
                 self._attr_effect = effect
                 self._animation.start(effect)
             else:
