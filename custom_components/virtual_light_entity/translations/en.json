@@ -12,14 +12,14 @@
       },
       "color_modes": {
         "title": "Color Modes",
-        "description": "Select which color modes this virtual light should support. Pick the modes that match the type of light you want to simulate.",
+        "description": "Select which color modes this virtual light should support.",
         "data": {
           "supported_color_modes": "Supported Color Modes"
         }
       },
       "animations": {
         "title": "Animations",
-        "description": "Choose which animation effects to enable for this virtual light. These will appear as effects in the light controls.",
+        "description": "Choose which animation effects to enable for this virtual light.",
         "data": {
           "animations": "Available Animations"
         }
@@ -29,7 +29,16 @@
   "options": {
     "step": {
       "init": {
-        "title": "Virtual Light Settings",
+        "title": "Virtual Light Options",
+        "description": "Choose what you would like to configure.",
+        "menu_options": {
+          "light_settings": "Light Settings",
+          "create_animation": "Create Custom Animation",
+          "delete_animation": "Delete Custom Animation"
+        }
+      },
+      "light_settings": {
+        "title": "Light Settings",
         "description": "Update the configuration for this virtual light.",
         "data": {
           "light_name": "Light Name",
@@ -37,7 +46,41 @@
           "animations": "Available Animations",
           "initial_brightness": "Default Brightness"
         }
+      },
+      "create_animation": {
+        "title": "Create Custom Animation",
+        "description": "Design a new keyframe animation. Give it a name and choose whether it loops.",
+        "data": {
+          "animation_name": "Animation Name",
+          "animation_loop": "Loop Animation"
+        }
+      },
+      "add_keyframe": {
+        "title": "Add Keyframe",
+        "description": "Designing: **{name}** — Keyframe #{keyframe_num}. Set the color, brightness, duration, and transition to the next keyframe.",
+        "data": {
+          "keyframe_rgb": "Color",
+          "keyframe_brightness": "Brightness",
+          "keyframe_duration": "Duration (seconds to transition to next keyframe)",
+          "keyframe_transition": "Transition Type",
+          "add_more_keyframes": "Add another keyframe after this one"
+        }
+      },
+      "delete_animation": {
+        "title": "Delete Custom Animation",
+        "description": "Select a custom animation to delete.",
+        "data": {
+          "animation_select": "Animation to Delete"
+        }
       }
+    },
+    "error": {
+      "name_conflict": "This name conflicts with a built-in effect.",
+      "name_empty": "Please enter an animation name."
+    },
+    "abort": {
+      "store_not_available": "Animation store is not available. Try reloading the integration.",
+      "no_custom_animations": "No custom animations have been created yet."
     }
   }
 }

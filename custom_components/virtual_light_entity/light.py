@@ -19,7 +19,7 @@ from homeassistant.components.light import (
     LightEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -35,6 +35,8 @@ from .const import (
     DEFAULT_INITIAL_STATE,
     DEFAULT_INITIAL_BRIGHTNESS,
     EFFECT_SOLID,
+    CUSTOM_EFFECT_PREFIX,
+    DATA_STORE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,7 +48,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Virtual Light from a config entry."""
-    async_add_entities([VirtualLight(config_entry)])
+    async_add_entities([VirtualLight(hass, config_entry)])
 
 
 class VirtualLight(LightEntity, RestoreEntity):
@@ -55,8 +57,9 @@ class VirtualLight(LightEntity, RestoreEntity):
     _attr_has_entity_name = True
     _attr_name = None  # Use device name as entity name
 
-    def __init__(self, config_entry: ConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize the virtual light."""
+        self.hass = hass
         self._config_entry = config_entry
         data = config_entry.data
         light_name = data.get(CONF_LIGHT_NAME, "Virtual Light")
@@ -171,9 +174,41 @@ class VirtualLight(LightEntity, RestoreEntity):
 
         self.async_write_ha_state()
 
+    def _sync_custom_animations(self) -> None:
+        """Sync custom animations from the shared store."""
+        store = self.hass.data.get(DOMAIN, {}).get(DATA_STORE)
+        if store is None:
+            return
+
+        # Update the animation engine with custom animation data
+        self._animation.set_custom_animations(store.animations)
+
+        # Rebuild effect list: configured built-in effects + custom effects
+        configured_effects = list(
+            self._config_entry.data.get(CONF_ANIMATIONS, [])
+        )
+        for name in store.get_animation_names():
+            display_name = f"{CUSTOM_EFFECT_PREFIX}{name}"
+            if display_name not in configured_effects:
+                configured_effects.append(display_name)
+
+        self._attr_effect_list = configured_effects
+        if configured_effects:
+            self._attr_supported_features = (
+                LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
+            )
+
     async def async_added_to_hass(self) -> None:
         """Restore last state when added to hass."""
         await super().async_added_to_hass()
+
+        # Sync custom animations and listen for changes
+        self._sync_custom_animations()
+        store = self.hass.data.get(DOMAIN, {}).get(DATA_STORE)
+        if store:
+            self.async_on_remove(
+                store.async_add_listener(self._on_store_updated)
+            )
 
         last_state = await self.async_get_last_state()
         if last_state is None:
@@ -206,6 +241,12 @@ class VirtualLight(LightEntity, RestoreEntity):
             self._attr_color_mode = ColorMode.RGB
         elif self._attr_color_temp_kelvin and ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
             self._attr_color_mode = ColorMode.COLOR_TEMP
+
+    @callback
+    def _on_store_updated(self) -> None:
+        """Handle custom animation store updates."""
+        self._sync_custom_animations()
+        self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Stop animations when entity is removed."""
@@ -261,7 +302,12 @@ class VirtualLight(LightEntity, RestoreEntity):
                 self._animation.stop()
             elif effect and effect in (self._attr_effect_list or []):
                 self._attr_effect = effect
-                self._animation.start(effect)
+                # For custom animations, strip the prefix to look up in store
+                if effect.startswith(CUSTOM_EFFECT_PREFIX):
+                    anim_key = effect[len(CUSTOM_EFFECT_PREFIX):]
+                    self._animation.start(anim_key)
+                else:
+                    self._animation.start(effect)
             else:
                 self._attr_effect = None
                 self._animation.stop()

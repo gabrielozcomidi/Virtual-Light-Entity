@@ -33,11 +33,16 @@ class AnimationEngine:
         self._task: asyncio.Task | None = None
         self._running = False
         self._effect: str | None = None
+        self._custom_animations: dict[str, dict[str, Any]] = {}
 
     @property
     def current_effect(self) -> str | None:
         """Return the current effect."""
         return self._effect
+
+    def set_custom_animations(self, animations: dict[str, dict[str, Any]]) -> None:
+        """Update available custom animations."""
+        self._custom_animations = animations
 
     def start(self, effect: str) -> None:
         """Start an animation effect."""
@@ -57,15 +62,26 @@ class AnimationEngine:
     async def _run(self, effect: str) -> None:
         """Run the animation loop."""
         try:
+            # Check built-in effects first
             handler = _EFFECT_HANDLERS.get(effect)
-            if handler is None:
+            if handler is not None:
+                async for state in handler():
+                    if not self._running:
+                        break
+                    self._current_state = state
+                    self._update_callback()
+                    await asyncio.sleep(ANIMATION_STEP_INTERVAL)
                 return
-            async for state in handler():
-                if not self._running:
-                    break
-                self._current_state = state
-                self._update_callback()
-                await asyncio.sleep(ANIMATION_STEP_INTERVAL)
+
+            # Check custom keyframe animations
+            custom = self._custom_animations.get(effect)
+            if custom is not None:
+                async for state in _keyframe_animation(custom):
+                    if not self._running:
+                        break
+                    self._current_state = state
+                    self._update_callback()
+                    await asyncio.sleep(ANIMATION_STEP_INTERVAL)
         except asyncio.CancelledError:
             pass
 
@@ -266,3 +282,98 @@ _EFFECT_HANDLERS = {
     EFFECT_OCEAN: _ocean_wave,
     EFFECT_AURORA: _aurora,
 }
+
+
+# --- Keyframe interpolation engine ---
+
+
+def _ease_in_out(t: float) -> float:
+    """Ease in-out curve (smooth acceleration and deceleration)."""
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _interpolate_value(start: float, end: float, t: float, transition: str) -> float:
+    """Interpolate between two values using the specified transition."""
+    if transition == "ease":
+        t = _ease_in_out(t)
+    # "linear" uses t directly
+    return start + (end - start) * t
+
+
+def _interpolate_color(
+    start: tuple[int, int, int],
+    end: tuple[int, int, int],
+    t: float,
+    transition: str,
+) -> tuple[int, int, int]:
+    """Interpolate between two RGB colors."""
+    return (
+        int(_interpolate_value(start[0], end[0], t, transition)),
+        int(_interpolate_value(start[1], end[1], t, transition)),
+        int(_interpolate_value(start[2], end[2], t, transition)),
+    )
+
+
+async def _keyframe_animation(animation_data: dict[str, Any]):
+    """Play a custom keyframe animation."""
+    keyframes = animation_data.get("keyframes", [])
+    loop = animation_data.get("loop", True)
+
+    if not keyframes:
+        return
+
+    # Single keyframe — just hold it
+    if len(keyframes) == 1:
+        kf = keyframes[0]
+        while True:
+            yield {
+                "brightness": int(kf["brightness"]),
+                "rgb_color": tuple(kf["rgb"]),
+            }
+            await asyncio.sleep(0.5)
+
+    while True:
+        for i in range(len(keyframes)):
+            current_kf = keyframes[i]
+            next_kf = keyframes[(i + 1) % len(keyframes)]
+
+            # On the last keyframe, if not looping, just hold it
+            if i == len(keyframes) - 1 and not loop:
+                while True:
+                    yield {
+                        "brightness": int(current_kf["brightness"]),
+                        "rgb_color": tuple(current_kf["rgb"]),
+                    }
+                    await asyncio.sleep(0.5)
+
+            duration = float(current_kf.get("duration", 1.0))
+            transition = current_kf.get("transition", "linear")
+
+            # Number of steps for this keyframe transition
+            steps = max(1, int(duration / ANIMATION_STEP_INTERVAL))
+
+            for step in range(steps):
+                t = step / steps
+
+                brightness = int(
+                    _interpolate_value(
+                        current_kf["brightness"],
+                        next_kf["brightness"],
+                        t,
+                        transition,
+                    )
+                )
+                brightness = max(1, min(255, brightness))
+
+                rgb = _interpolate_color(
+                    tuple(current_kf["rgb"]),
+                    tuple(next_kf["rgb"]),
+                    t,
+                    transition,
+                )
+
+                yield {"brightness": brightness, "rgb_color": rgb}
+                await asyncio.sleep(0)
+
+        if not loop:
+            break
