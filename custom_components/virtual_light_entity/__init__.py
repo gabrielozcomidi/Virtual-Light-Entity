@@ -3,14 +3,26 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import Any
 
+import voluptuous as vol
+
+from homeassistant.components import websocket_api
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+import homeassistant.helpers.config_validation as cv
 
 from .const import DOMAIN, PLATFORMS, DATA_STORE
-from .store import AnimationStore
 
 _LOGGER = logging.getLogger(__name__)
+
+FRONTEND_URL = "/virtual_light_entity/animation-editor-card.js"
+FRONTEND_PATH = str(Path(__file__).parent / "frontend" / "animation-editor-card.js")
+
+# Track whether global setup (services, frontend, WS) has been done
+DATA_SETUP_DONE = "setup_done"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -18,17 +30,164 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = entry.data
 
-    # Initialize shared animation store (once for all entries)
-    if DATA_STORE not in hass.data[DOMAIN]:
-        store = AnimationStore(hass)
-        await store.async_load()
-        hass.data[DOMAIN][DATA_STORE] = store
+    # One-time global setup: store, services, frontend, websocket
+    if not hass.data[DOMAIN].get(DATA_SETUP_DONE):
+        await _async_global_setup(hass)
+        hass.data[DOMAIN][DATA_SETUP_DONE] = True
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     return True
+
+
+async def _async_global_setup(hass: HomeAssistant) -> None:
+    """Perform one-time setup: store, services, frontend, websocket API."""
+    from .store import AnimationStore
+
+    # Animation store
+    if DATA_STORE not in hass.data[DOMAIN]:
+        store = AnimationStore(hass)
+        await store.async_load()
+        hass.data[DOMAIN][DATA_STORE] = store
+
+    # Serve frontend card JS
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(FRONTEND_URL, FRONTEND_PATH, cache_headers=False)]
+    )
+    _LOGGER.info(
+        "Animation Editor card JS served at %s — add it as a Lovelace resource",
+        FRONTEND_URL,
+    )
+
+    # Register websocket commands
+    websocket_api.async_register_command(hass, ws_list_animations)
+    websocket_api.async_register_command(hass, ws_get_animation)
+
+    # Register services
+    await _register_services(hass)
+
+
+async def _register_services(hass: HomeAssistant) -> None:
+    """Register animation management services."""
+
+    async def handle_save_animation(call: ServiceCall) -> None:
+        """Save a custom animation."""
+        store = hass.data.get(DOMAIN, {}).get(DATA_STORE)
+        if store is None:
+            _LOGGER.error("Animation store not available")
+            return
+
+        name = call.data["name"]
+        animation_data = {
+            "loop": call.data.get("loop", True),
+            "steps": call.data.get("steps", []),
+        }
+        await store.async_add_animation(name, animation_data)
+        _LOGGER.info("Saved animation: %s", name)
+
+    async def handle_delete_animation(call: ServiceCall) -> None:
+        """Delete a custom animation."""
+        store = hass.data.get(DOMAIN, {}).get(DATA_STORE)
+        if store is None:
+            _LOGGER.error("Animation store not available")
+            return
+
+        name = call.data["name"]
+        deleted = await store.async_delete_animation(name)
+        if deleted:
+            _LOGGER.info("Deleted animation: %s", name)
+        else:
+            _LOGGER.warning("Animation not found: %s", name)
+
+    hass.services.async_register(
+        DOMAIN,
+        "save_animation",
+        handle_save_animation,
+        schema=vol.Schema(
+            {
+                vol.Required("name"): cv.string,
+                vol.Optional("loop", default=True): cv.boolean,
+                vol.Optional("steps", default=[]): vol.All(
+                    cv.ensure_list,
+                    [
+                        vol.Any(
+                            vol.Schema(
+                                {
+                                    vol.Required("type"): "keyframe",
+                                    vol.Required("rgb"): vol.All(
+                                        cv.ensure_list, [vol.Coerce(int)]
+                                    ),
+                                    vol.Required("brightness"): vol.All(
+                                        vol.Coerce(int), vol.Range(min=1, max=255)
+                                    ),
+                                    vol.Required("duration"): vol.All(
+                                        vol.Coerce(float), vol.Range(min=0.1, max=30)
+                                    ),
+                                }
+                            ),
+                            vol.Schema(
+                                {
+                                    vol.Required("type"): "transition",
+                                    vol.Required("style"): vol.In(["solid", "fade"]),
+                                    vol.Optional("duration", default=0): vol.All(
+                                        vol.Coerce(float), vol.Range(min=0, max=30)
+                                    ),
+                                }
+                            ),
+                        )
+                    ],
+                ),
+            }
+        ),
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        "delete_animation",
+        handle_delete_animation,
+        schema=vol.Schema({vol.Required("name"): cv.string}),
+    )
+
+
+# --- Websocket API ---
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "virtual_light_entity/list_animations"}
+)
+@callback
+def ws_list_animations(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """List all custom animations."""
+    store = hass.data.get(DOMAIN, {}).get(DATA_STORE)
+    animations = store.get_animation_names() if store else []
+    connection.send_result(msg["id"], {"animations": animations})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "virtual_light_entity/get_animation",
+        vol.Required("name"): str,
+    }
+)
+@callback
+def ws_get_animation(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Get a specific animation's data."""
+    store = hass.data.get(DOMAIN, {}).get(DATA_STORE)
+    animation = store.get_animation(msg["name"]) if store else None
+    if animation:
+        connection.send_result(msg["id"], {"animation": animation})
+    else:
+        connection.send_error(msg["id"], "not_found", "Animation not found")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

@@ -30,11 +30,11 @@
     "step": {
       "init": {
         "title": "Virtual Light Options",
-        "description": "Choose what you would like to configure.",
+        "description": "Manage light settings and animations.\n\nTo create animations visually, add the **Animation Editor** card to your dashboard.",
         "menu_options": {
           "light_settings": "Light Settings",
-          "create_animation": "Create Custom Animation",
-          "delete_animation": "Delete Custom Animation"
+          "create_animation": "Create Animation (Basic)",
+          "delete_animation": "Delete Animation"
         }
       },
       "light_settings": {
@@ -49,7 +49,7 @@
       },
       "create_animation": {
         "title": "Create Custom Animation",
-        "description": "Design a new keyframe animation. Give it a name and choose whether it loops.",
+        "description": "Design a new keyframe animation. For the full visual editor, use the Animation Editor card on your dashboard.",
         "data": {
           "animation_name": "Animation Name",
           "animation_loop": "Loop Animation"

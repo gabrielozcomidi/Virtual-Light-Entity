@@ -1,0 +1,33 @@
+save_animation:
+  name: Save Animation
+  description: Create or update a custom keyframe animation.
+  fields:
+    name:
+      name: Name
+      description: The name of the animation.
+      required: true
+      selector:
+        text:
+    loop:
+      name: Loop
+      description: Whether the animation should loop.
+      default: true
+      selector:
+        boolean:
+    steps:
+      name: Steps
+      description: List of keyframe and transition steps.
+      required: true
+      selector:
+        object:
+
+delete_animation:
+  name: Delete Animation
+  description: Delete a custom animation by name.
+  fields:
+    name:
+      name: Name
+      description: The name of the animation to delete.
+      required: true
+      selector:
+        text:
