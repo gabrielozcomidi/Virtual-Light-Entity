@@ -21,6 +21,7 @@ from homeassistant.components.light import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -52,28 +53,34 @@ class VirtualLight(LightEntity, RestoreEntity):
     """Representation of a Virtual Light."""
 
     _attr_has_entity_name = True
+    _attr_name = None  # Use device name as entity name
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize the virtual light."""
         self._config_entry = config_entry
         data = config_entry.data
+        light_name = data.get(CONF_LIGHT_NAME, "Virtual Light")
 
         self._attr_unique_id = config_entry.entry_id
-        self._attr_name = data.get(CONF_LIGHT_NAME, "Virtual Light")
 
-        # Color mode setup
-        raw_modes = data.get(CONF_SUPPORTED_COLOR_MODES, [ColorMode.BRIGHTNESS])
-        self._attr_supported_color_modes = set(raw_modes)
-
-        # If no color modes selected, default to brightness
-        if not self._attr_supported_color_modes:
+        # Color mode setup — sanitize per HA rules:
+        # BRIGHTNESS must not coexist with any other color mode (it's implied).
+        # ONOFF must not coexist with any other mode.
+        raw_modes = set(data.get(CONF_SUPPORTED_COLOR_MODES, [ColorMode.BRIGHTNESS]))
+        color_modes = raw_modes - {ColorMode.BRIGHTNESS, ColorMode.ONOFF}
+        if color_modes:
+            # Other modes present — brightness is implied, remove it
+            self._attr_supported_color_modes = color_modes
+        elif ColorMode.BRIGHTNESS in raw_modes:
             self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+        else:
+            self._attr_supported_color_modes = {ColorMode.ONOFF}
 
         # Effect/animation setup
         effects = data.get(CONF_ANIMATIONS, [])
         if effects:
             self._attr_supported_features = LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
-            self._attr_effect_list = effects
+            self._attr_effect_list = list(effects)
         else:
             self._attr_supported_features = LightEntityFeature.TRANSITION
             self._attr_effect_list = []
@@ -89,39 +96,42 @@ class VirtualLight(LightEntity, RestoreEntity):
         self._attr_xy_color = None
         self._attr_effect = None
 
-        # Set initial color mode
-        modes = self._attr_supported_color_modes
-        if ColorMode.HS in modes:
-            self._attr_color_mode = ColorMode.HS
-        elif ColorMode.RGB in modes:
-            self._attr_color_mode = ColorMode.RGB
-        elif ColorMode.RGBW in modes:
-            self._attr_color_mode = ColorMode.RGBW
-        elif ColorMode.RGBWW in modes:
-            self._attr_color_mode = ColorMode.RGBWW
-        elif ColorMode.XY in modes:
-            self._attr_color_mode = ColorMode.XY
-        elif ColorMode.COLOR_TEMP in modes:
-            self._attr_color_mode = ColorMode.COLOR_TEMP
-        else:
-            self._attr_color_mode = ColorMode.BRIGHTNESS
+        # Set initial color mode — must be one of the supported modes
+        self._attr_color_mode = self._pick_initial_color_mode()
 
         # Color temp range (mireds)
-        if ColorMode.COLOR_TEMP in modes:
+        if ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
             self._attr_min_mireds = 153   # ~6500K
             self._attr_max_mireds = 500   # ~2000K
 
         # Device info
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, config_entry.entry_id)},
-            "name": data.get(CONF_LIGHT_NAME, "Virtual Light"),
-            "manufacturer": "Virtual Light Entity",
-            "model": "Virtual Light",
-            "sw_version": "1.0.0",
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=light_name,
+            manufacturer="Virtual Light Entity",
+            model="Virtual Light",
+            sw_version="1.0.0",
+        )
 
         # Animation engine
         self._animation = AnimationEngine(self._animation_update)
+
+    def _pick_initial_color_mode(self) -> ColorMode:
+        """Pick an initial color mode from supported modes."""
+        modes = self._attr_supported_color_modes
+        for preferred in (
+            ColorMode.HS,
+            ColorMode.RGB,
+            ColorMode.RGBW,
+            ColorMode.RGBWW,
+            ColorMode.XY,
+            ColorMode.COLOR_TEMP,
+            ColorMode.BRIGHTNESS,
+            ColorMode.ONOFF,
+        ):
+            if preferred in modes:
+                return preferred
+        return ColorMode.UNKNOWN
 
     def _animation_update(self) -> None:
         """Handle animation state update."""
@@ -131,13 +141,33 @@ class VirtualLight(LightEntity, RestoreEntity):
 
         if "brightness" in state:
             self._attr_brightness = state["brightness"]
+
+        modes = self._attr_supported_color_modes
+
         if "rgb_color" in state:
-            self._attr_rgb_color = state["rgb_color"]
-            self._attr_color_mode = ColorMode.RGB
+            if ColorMode.RGB in modes:
+                self._attr_rgb_color = state["rgb_color"]
+                self._attr_color_mode = ColorMode.RGB
+            elif ColorMode.HS in modes:
+                # Convert RGB to HS for entities that only support HS
+                r, g, b = state["rgb_color"]
+                import colorsys
+                h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+                self._attr_hs_color = (h * 360, s * 100)
+                self._attr_color_mode = ColorMode.HS
+
         if "hs_color" in state:
-            hs = state["hs_color"]
-            self._attr_hs_color = (hs[0], hs[1])
-            self._attr_color_mode = ColorMode.HS
+            if ColorMode.HS in modes:
+                hs = state["hs_color"]
+                self._attr_hs_color = (hs[0], hs[1])
+                self._attr_color_mode = ColorMode.HS
+            elif ColorMode.RGB in modes:
+                # Convert HS to RGB for entities that only support RGB
+                import colorsys
+                h, s = state["hs_color"]
+                r, g, b = colorsys.hsv_to_rgb(h / 360, s / 100, 1.0)
+                self._attr_rgb_color = (int(r * 255), int(g * 255), int(b * 255))
+                self._attr_color_mode = ColorMode.RGB
 
         self.async_write_ha_state()
 
@@ -252,17 +282,20 @@ class VirtualLight(LightEntity, RestoreEntity):
         """Update entity when options change."""
         data = self._config_entry.data
 
-        self._attr_name = data.get(CONF_LIGHT_NAME, "Virtual Light")
-
-        raw_modes = data.get(CONF_SUPPORTED_COLOR_MODES, [ColorMode.BRIGHTNESS])
-        self._attr_supported_color_modes = set(raw_modes)
-        if not self._attr_supported_color_modes:
+        # Sanitize color modes the same way as __init__
+        raw_modes = set(data.get(CONF_SUPPORTED_COLOR_MODES, [ColorMode.BRIGHTNESS]))
+        color_modes = raw_modes - {ColorMode.BRIGHTNESS, ColorMode.ONOFF}
+        if color_modes:
+            self._attr_supported_color_modes = color_modes
+        elif ColorMode.BRIGHTNESS in raw_modes:
             self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+        else:
+            self._attr_supported_color_modes = {ColorMode.ONOFF}
 
         effects = data.get(CONF_ANIMATIONS, [])
         if effects:
             self._attr_supported_features = LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
-            self._attr_effect_list = effects
+            self._attr_effect_list = list(effects)
         else:
             self._attr_supported_features = LightEntityFeature.TRANSITION
             self._attr_effect_list = []
@@ -270,5 +303,9 @@ class VirtualLight(LightEntity, RestoreEntity):
         if ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
             self._attr_min_mireds = 153
             self._attr_max_mireds = 500
+
+        # Ensure current color_mode is still valid
+        if self._attr_color_mode not in self._attr_supported_color_modes:
+            self._attr_color_mode = self._pick_initial_color_mode()
 
         self.async_write_ha_state()
