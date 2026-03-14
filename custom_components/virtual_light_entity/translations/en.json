@@ -55,15 +55,30 @@
           "animation_loop": "Loop Animation"
         }
       },
+      "animation_builder": {
+        "title": "Animation Builder — {name}",
+        "description": "Build your animation by adding keyframes and transitions.\n\n{timeline}",
+        "menu_options": {
+          "add_keyframe": "Add Keyframe",
+          "add_transition": "Add Transition",
+          "save_animation": "Save Animation"
+        }
+      },
       "add_keyframe": {
         "title": "Add Keyframe",
-        "description": "Designing: **{name}** — Keyframe #{keyframe_num}. Set the color, brightness, duration, and transition to the next keyframe.",
+        "description": "Set the color, brightness, and hold duration for this keyframe. ({remaining}s remaining)",
         "data": {
           "keyframe_rgb": "Color",
           "keyframe_brightness": "Brightness",
-          "keyframe_duration": "Duration (seconds to transition to next keyframe)",
-          "keyframe_transition": "Transition Type",
-          "add_more_keyframes": "Add another keyframe after this one"
+          "keyframe_duration": "Hold Duration"
+        }
+      },
+      "add_transition": {
+        "title": "Add Transition",
+        "description": "Set how the light transitions to the next keyframe. ({remaining}s remaining)",
+        "data": {
+          "transition_style": "Transition Style",
+          "transition_duration": "Fade Duration (only for Fade)"
         }
       },
       "delete_animation": {
@@ -76,7 +91,8 @@
     },
     "error": {
       "name_conflict": "This name conflicts with a built-in effect.",
-      "name_empty": "Please enter an animation name."
+      "name_empty": "Please enter an animation name.",
+      "exceeds_max_duration": "Duration exceeds the 30-second maximum."
     },
     "abort": {
       "store_not_available": "Animation store is not available. Try reloading the integration.",

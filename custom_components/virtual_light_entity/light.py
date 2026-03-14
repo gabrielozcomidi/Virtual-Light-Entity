@@ -183,20 +183,27 @@ class VirtualLight(LightEntity, RestoreEntity):
         # Update the animation engine with custom animation data
         self._animation.set_custom_animations(store.animations)
 
-        # Rebuild effect list: configured built-in effects + custom effects
+        # Rebuild effect list: Solid Color first, then configured built-in effects,
+        # then custom animations
         configured_effects = list(
             self._config_entry.data.get(CONF_ANIMATIONS, [])
         )
+
+        # Always ensure Solid Color is present and first
+        if EFFECT_SOLID in configured_effects:
+            configured_effects.remove(EFFECT_SOLID)
+        configured_effects.insert(0, EFFECT_SOLID)
+
+        # Append custom animations
         for name in store.get_animation_names():
             display_name = f"{CUSTOM_EFFECT_PREFIX}{name}"
             if display_name not in configured_effects:
                 configured_effects.append(display_name)
 
         self._attr_effect_list = configured_effects
-        if configured_effects:
-            self._attr_supported_features = (
-                LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
-            )
+        self._attr_supported_features = (
+            LightEntityFeature.EFFECT | LightEntityFeature.TRANSITION
+        )
 
     async def async_added_to_hass(self) -> None:
         """Restore last state when added to hass."""

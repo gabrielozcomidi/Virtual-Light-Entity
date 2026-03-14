@@ -284,7 +284,7 @@ _EFFECT_HANDLERS = {
 }
 
 
-# --- Keyframe interpolation engine ---
+# --- Keyframe + Transition interpolation engine ---
 
 
 def _ease_in_out(t: float) -> float:
@@ -292,88 +292,127 @@ def _ease_in_out(t: float) -> float:
     return t * t * (3.0 - 2.0 * t)
 
 
-def _interpolate_value(start: float, end: float, t: float, transition: str) -> float:
-    """Interpolate between two values using the specified transition."""
-    if transition == "ease":
-        t = _ease_in_out(t)
-    # "linear" uses t directly
+def _interpolate_value(start: float, end: float, t: float) -> float:
+    """Linearly interpolate between two values."""
     return start + (end - start) * t
 
 
 def _interpolate_color(
-    start: tuple[int, int, int],
-    end: tuple[int, int, int],
+    start: list[int],
+    end: list[int],
     t: float,
-    transition: str,
 ) -> tuple[int, int, int]:
     """Interpolate between two RGB colors."""
     return (
-        int(_interpolate_value(start[0], end[0], t, transition)),
-        int(_interpolate_value(start[1], end[1], t, transition)),
-        int(_interpolate_value(start[2], end[2], t, transition)),
+        int(_interpolate_value(start[0], end[0], t)),
+        int(_interpolate_value(start[1], end[1], t)),
+        int(_interpolate_value(start[2], end[2], t)),
     )
 
 
 async def _keyframe_animation(animation_data: dict[str, Any]):
-    """Play a custom keyframe animation."""
-    keyframes = animation_data.get("keyframes", [])
+    """Play a custom animation with keyframe and transition steps.
+
+    Data model:
+      steps: [
+        {"type": "keyframe", "rgb": [r,g,b], "brightness": N, "duration": secs},
+        {"type": "transition", "style": "solid"|"fade", "duration": secs},
+        {"type": "keyframe", ...},
+        ...
+      ]
+    """
+    steps = animation_data.get("steps", [])
     loop = animation_data.get("loop", True)
 
+    # Extract just the keyframes for reference
+    keyframes = [s for s in steps if s["type"] == "keyframe"]
     if not keyframes:
         return
 
-    # Single keyframe — just hold it
-    if len(keyframes) == 1:
-        kf = keyframes[0]
-        while True:
-            yield {
-                "brightness": int(kf["brightness"]),
-                "rgb_color": tuple(kf["rgb"]),
-            }
-            await asyncio.sleep(0.5)
-
     while True:
-        for i in range(len(keyframes)):
-            current_kf = keyframes[i]
-            next_kf = keyframes[(i + 1) % len(keyframes)]
+        kf_index = 0  # Track which keyframe we're on
 
-            # On the last keyframe, if not looping, just hold it
-            if i == len(keyframes) - 1 and not loop:
-                while True:
+        for i, step in enumerate(steps):
+            if step["type"] == "keyframe":
+                # Hold at this keyframe's color/brightness for its duration
+                rgb = tuple(step["rgb"])
+                brightness = max(1, min(255, int(step["brightness"])))
+                hold_steps = max(1, int(float(step["duration"]) / ANIMATION_STEP_INTERVAL))
+
+                for _ in range(hold_steps):
+                    yield {"brightness": brightness, "rgb_color": rgb}
+                    await asyncio.sleep(0)
+
+                kf_index += 1
+
+            elif step["type"] == "transition":
+                # Find the previous and next keyframe
+                prev_kf = None
+                next_kf = None
+
+                # Previous keyframe is the last one before this transition
+                for j in range(i - 1, -1, -1):
+                    if steps[j]["type"] == "keyframe":
+                        prev_kf = steps[j]
+                        break
+
+                # Next keyframe is the first one after this transition
+                for j in range(i + 1, len(steps)):
+                    if steps[j]["type"] == "keyframe":
+                        next_kf = steps[j]
+                        break
+
+                # If looping and no next keyframe, wrap to first keyframe
+                if next_kf is None and loop:
+                    next_kf = keyframes[0]
+
+                if prev_kf is None or next_kf is None:
+                    continue
+
+                style = step.get("style", "solid")
+
+                if style == "solid":
+                    # Instant jump — just yield the next keyframe once
                     yield {
-                        "brightness": int(current_kf["brightness"]),
-                        "rgb_color": tuple(current_kf["rgb"]),
+                        "brightness": max(1, min(255, int(next_kf["brightness"]))),
+                        "rgb_color": tuple(next_kf["rgb"]),
                     }
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0)
 
-            duration = float(current_kf.get("duration", 1.0))
-            transition = current_kf.get("transition", "linear")
+                elif style == "fade":
+                    duration = float(step.get("duration", 1.0))
+                    fade_steps = max(1, int(duration / ANIMATION_STEP_INTERVAL))
 
-            # Number of steps for this keyframe transition
-            steps = max(1, int(duration / ANIMATION_STEP_INTERVAL))
+                    for s in range(fade_steps):
+                        t = s / fade_steps
+                        # Apply ease curve for smoother fades
+                        t_smooth = _ease_in_out(t)
 
-            for step in range(steps):
-                t = step / steps
+                        brightness = int(
+                            _interpolate_value(
+                                prev_kf["brightness"],
+                                next_kf["brightness"],
+                                t_smooth,
+                            )
+                        )
+                        brightness = max(1, min(255, brightness))
 
-                brightness = int(
-                    _interpolate_value(
-                        current_kf["brightness"],
-                        next_kf["brightness"],
-                        t,
-                        transition,
-                    )
-                )
-                brightness = max(1, min(255, brightness))
+                        rgb = _interpolate_color(
+                            prev_kf["rgb"],
+                            next_kf["rgb"],
+                            t_smooth,
+                        )
 
-                rgb = _interpolate_color(
-                    tuple(current_kf["rgb"]),
-                    tuple(next_kf["rgb"]),
-                    t,
-                    transition,
-                )
-
-                yield {"brightness": brightness, "rgb_color": rgb}
-                await asyncio.sleep(0)
+                        yield {"brightness": brightness, "rgb_color": rgb}
+                        await asyncio.sleep(0)
 
         if not loop:
+            # Hold last keyframe
+            last_kf = keyframes[-1]
+            while True:
+                yield {
+                    "brightness": max(1, min(255, int(last_kf["brightness"]))),
+                    "rgb_color": tuple(last_kf["rgb"]),
+                }
+                await asyncio.sleep(0.5)
             break

@@ -28,15 +28,56 @@ from .const import (
     CONF_ANIM_KF_RGB,
     CONF_ANIM_KF_BRIGHTNESS,
     CONF_ANIM_KF_DURATION,
-    CONF_ANIM_KF_TRANSITION,
-    CONF_ANIM_ADD_MORE,
+    CONF_ANIM_TRANS_STYLE,
+    CONF_ANIM_TRANS_DURATION,
     CONF_ANIM_SELECT,
-    TRANSITION_LINEAR,
-    TRANSITION_EASE,
-    TRANSITION_OPTIONS,
+    TRANSITION_SOLID,
+    TRANSITION_FADE,
     CUSTOM_EFFECT_PREFIX,
     DATA_STORE,
+    MAX_ANIMATION_DURATION,
 )
+
+
+def _build_timeline_summary(steps: list[dict[str, Any]]) -> str:
+    """Build a human-readable timeline summary of the animation so far."""
+    if not steps:
+        return "Timeline is empty. Add your first keyframe."
+
+    lines = []
+    total_time = 0.0
+
+    for i, step in enumerate(steps):
+        if step["type"] == "keyframe":
+            r, g, b = step["rgb"]
+            bri = step["brightness"]
+            dur = step["duration"]
+            lines.append(
+                f"  [{i+1}] Keyframe: RGB({r},{g},{b}) "
+                f"Brightness {bri} - Hold {dur}s"
+            )
+            total_time += dur
+        elif step["type"] == "transition":
+            style = step["style"].capitalize()
+            dur = step.get("duration", 0)
+            if step["style"] == TRANSITION_SOLID:
+                lines.append(f"  [{i+1}] Transition: Instant")
+            else:
+                lines.append(f"  [{i+1}] Transition: Fade ({dur}s)")
+                total_time += dur
+
+    remaining = MAX_ANIMATION_DURATION - total_time
+    lines.append(f"\nTotal: {total_time:.1f}s / {MAX_ANIMATION_DURATION:.0f}s "
+                 f"({remaining:.1f}s remaining)")
+    return "\n".join(lines)
+
+
+def _total_duration(steps: list[dict[str, Any]]) -> float:
+    """Calculate total duration of all steps."""
+    total = 0.0
+    for step in steps:
+        total += step.get("duration", 0)
+    return total
 
 
 class VirtualLightConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -159,7 +200,7 @@ class VirtualLightOptionsFlow(OptionsFlow):
         self._config_entry = config_entry
         self._anim_name: str = ""
         self._anim_loop: bool = True
-        self._anim_keyframes: list[dict[str, Any]] = []
+        self._anim_steps: list[dict[str, Any]] = []
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -257,13 +298,11 @@ class VirtualLightOptionsFlow(OptionsFlow):
     async def async_step_create_animation(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 1 of animation designer: name and loop setting."""
+        """Step 1: Name and loop setting for the animation."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             name = user_input[CONF_ANIM_NAME].strip()
-
-            # Check for name conflicts with built-in effects
             if name in ALL_EFFECTS or f"{CUSTOM_EFFECT_PREFIX}{name}" in ALL_EFFECTS:
                 errors[CONF_ANIM_NAME] = "name_conflict"
             elif not name:
@@ -271,8 +310,8 @@ class VirtualLightOptionsFlow(OptionsFlow):
             else:
                 self._anim_name = name
                 self._anim_loop = user_input.get(CONF_ANIM_LOOP, True)
-                self._anim_keyframes = []
-                return await self.async_step_add_keyframe()
+                self._anim_steps = []
+                return await self.async_step_animation_builder()
 
         return self.async_show_form(
             step_id="create_animation",
@@ -289,47 +328,71 @@ class VirtualLightOptionsFlow(OptionsFlow):
             errors=errors,
         )
 
+    async def async_step_animation_builder(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Animation builder menu — add keyframes, transitions, or save."""
+        # Determine which options are available
+        menu_options = ["add_keyframe"]
+
+        # Can only add transition if last step is a keyframe
+        last_is_keyframe = (
+            self._anim_steps and self._anim_steps[-1]["type"] == "keyframe"
+        )
+        if last_is_keyframe:
+            menu_options.append("add_transition")
+
+        # Can save if we have at least one keyframe
+        has_keyframe = any(s["type"] == "keyframe" for s in self._anim_steps)
+        if has_keyframe:
+            menu_options.append("save_animation")
+
+        timeline = _build_timeline_summary(self._anim_steps)
+
+        return self.async_show_menu(
+            step_id="animation_builder",
+            menu_options=menu_options,
+            description_placeholders={
+                "name": self._anim_name,
+                "timeline": timeline,
+            },
+        )
+
     async def async_step_add_keyframe(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Add a keyframe to the animation."""
+        """Add a keyframe step."""
+        errors: dict[str, str] = {}
+        remaining = MAX_ANIMATION_DURATION - _total_duration(self._anim_steps)
+
         if user_input is not None:
-            # Parse the RGB color value
-            rgb_hex = user_input.get(CONF_ANIM_KF_RGB, "#ffffff")
-            rgb = _hex_to_rgb(rgb_hex)
+            duration = float(user_input.get(CONF_ANIM_KF_DURATION, 1.0))
+            if duration > remaining:
+                errors[CONF_ANIM_KF_DURATION] = "exceeds_max_duration"
+            else:
+                # ColorRGBSelector returns [r, g, b] as a list of ints
+                rgb_value = user_input.get(CONF_ANIM_KF_RGB, [255, 255, 255])
+                if isinstance(rgb_value, list):
+                    rgb = rgb_value[:3]
+                else:
+                    rgb = [255, 255, 255]
 
-            keyframe = {
-                "rgb": list(rgb),
-                "brightness": int(user_input.get(CONF_ANIM_KF_BRIGHTNESS, 255)),
-                "duration": float(user_input.get(CONF_ANIM_KF_DURATION, 1.0)),
-                "transition": user_input.get(CONF_ANIM_KF_TRANSITION, TRANSITION_LINEAR),
-            }
-            self._anim_keyframes.append(keyframe)
+                keyframe = {
+                    "type": "keyframe",
+                    "rgb": rgb,
+                    "brightness": int(user_input.get(CONF_ANIM_KF_BRIGHTNESS, 255)),
+                    "duration": duration,
+                }
+                self._anim_steps.append(keyframe)
+                return await self.async_step_animation_builder()
 
-            add_more = user_input.get(CONF_ANIM_ADD_MORE, False)
-            if add_more:
-                return await self.async_step_add_keyframe()
-
-            # Save the animation
-            return await self._async_save_animation()
-
-        kf_num = len(self._anim_keyframes) + 1
-        transition_options = [
-            selector.SelectOptionDict(value=val, label=label)
-            for val, label in TRANSITION_OPTIONS.items()
-        ]
+        max_dur = min(remaining, MAX_ANIMATION_DURATION)
 
         return self.async_show_form(
             step_id="add_keyframe",
-            description_placeholders={
-                "name": self._anim_name,
-                "keyframe_num": str(kf_num),
-            },
             data_schema=vol.Schema(
                 {
-                    vol.Required(
-                        CONF_ANIM_KF_RGB, default="#ffffff"
-                    ): selector.ColorRGBSelector(),
+                    vol.Required(CONF_ANIM_KF_RGB): selector.ColorRGBSelector(),
                     vol.Required(
                         CONF_ANIM_KF_BRIGHTNESS, default=255
                     ): selector.NumberSelector(
@@ -341,27 +404,87 @@ class VirtualLightOptionsFlow(OptionsFlow):
                         CONF_ANIM_KF_DURATION, default=1.0
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=0.1, max=60.0, step=0.1,
+                            min=0.1, max=max_dur, step=0.1,
                             unit_of_measurement="seconds",
                             mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "remaining": f"{remaining:.1f}",
+            },
+        )
+
+    async def async_step_add_transition(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Add a transition between keyframes."""
+        errors: dict[str, str] = {}
+        remaining = MAX_ANIMATION_DURATION - _total_duration(self._anim_steps)
+
+        if user_input is not None:
+            style = user_input.get(CONF_ANIM_TRANS_STYLE, TRANSITION_SOLID)
+            duration = 0.0
+
+            if style == TRANSITION_FADE:
+                duration = float(user_input.get(CONF_ANIM_TRANS_DURATION, 1.0))
+                if duration > remaining:
+                    errors[CONF_ANIM_TRANS_DURATION] = "exceeds_max_duration"
+
+            if not errors:
+                transition = {
+                    "type": "transition",
+                    "style": style,
+                    "duration": duration,
+                }
+                self._anim_steps.append(transition)
+                return await self.async_step_animation_builder()
+
+        transition_options = [
+            selector.SelectOptionDict(
+                value=TRANSITION_SOLID, label="Solid (instant jump)"
+            ),
+            selector.SelectOptionDict(
+                value=TRANSITION_FADE, label="Fade (smooth blend)"
+            ),
+        ]
+
+        max_dur = min(remaining, MAX_ANIMATION_DURATION)
+
+        return self.async_show_form(
+            step_id="add_transition",
+            data_schema=vol.Schema(
+                {
                     vol.Required(
-                        CONF_ANIM_KF_TRANSITION, default=TRANSITION_LINEAR
+                        CONF_ANIM_TRANS_STYLE, default=TRANSITION_FADE
                     ): selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=transition_options,
                             mode=selector.SelectSelectorMode.DROPDOWN,
                         )
                     ),
-                    vol.Required(
-                        CONF_ANIM_ADD_MORE, default=True
-                    ): selector.BooleanSelector(),
+                    vol.Optional(
+                        CONF_ANIM_TRANS_DURATION, default=1.0
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.1, max=max_dur, step=0.1,
+                            unit_of_measurement="seconds",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
                 }
             ),
+            errors=errors,
+            description_placeholders={
+                "remaining": f"{remaining:.1f}",
+            },
         )
 
-    async def _async_save_animation(self) -> FlowResult:
+    async def async_step_save_animation(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
         """Save the custom animation to the shared store."""
         store = self.hass.data.get(DOMAIN, {}).get(DATA_STORE)
         if store is None:
@@ -369,14 +492,13 @@ class VirtualLightOptionsFlow(OptionsFlow):
 
         animation_data = {
             "loop": self._anim_loop,
-            "keyframes": self._anim_keyframes,
+            "steps": self._anim_steps,
         }
 
         await store.async_add_animation(self._anim_name, animation_data)
 
-        # Reset state
         self._anim_name = ""
-        self._anim_keyframes = []
+        self._anim_steps = []
 
         return self.async_create_entry(title="", data={})
 
@@ -418,15 +540,3 @@ class VirtualLightOptionsFlow(OptionsFlow):
                 }
             ),
         )
-
-
-def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
-    """Convert hex color string to RGB tuple."""
-    hex_color = hex_color.lstrip("#")
-    if len(hex_color) != 6:
-        return (255, 255, 255)
-    return (
-        int(hex_color[0:2], 16),
-        int(hex_color[2:4], 16),
-        int(hex_color[4:6], 16),
-    )
